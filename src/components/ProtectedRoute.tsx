@@ -2,6 +2,7 @@
 import React from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth"; // adjust import if your hook path differs
+import { AUTH_ENABLED } from "@/lib/authConfig";
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -14,6 +15,12 @@ interface ProtectedRouteProps {
 const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children }) => {
   const { user, loading } = useAuth();
   const location = useLocation();
+
+  // Auth gate switched off (VITE_AUTH_ENABLED=false): render straight through
+  // without waiting on a session. The page itself is unchanged.
+  if (!AUTH_ENABLED) {
+    return <>{children}</>;
+  }
 
   // While auth state is loading, show a spinner/placeholder
   if (loading) {

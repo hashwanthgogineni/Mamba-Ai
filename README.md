@@ -17,7 +17,7 @@ Gamora AI is an intelligent game generation platform that leverages advanced AI 
 ### Backend
 - **FastAPI**: High-performance async web framework
 - **Python 3.12+**: Core backend language
-- **DeepSeek API**: AI model for code generation
+- **DeepSeek API**: AI model for code generation (`deepseek-flash` / DeepSeek-V4.1-Flash)
 - **Supabase**: PostgreSQL database, authentication, and storage
 - **Redis**: Caching layer for improved performance
 - **WebSockets**: Real-time communication for generation progress
@@ -157,6 +157,10 @@ uvicorn main:app --host 0.0.0.0 --port 8000 --workers 4
 
 ### Backend (.env in core/)
 - `DEEPSEEK_API_KEY`: Required - DeepSeek API key for AI generation
+- `DEEPSEEK_MODEL`: Optional - model ID (default: `deepseek-flash`). The legacy
+  `deepseek-chat` and `deepseek-reasoner` names were retired on 2026-07-24 and
+  no longer resolve.
+- `DEEPSEEK_BASE_URL`: Optional - API base URL (default: `https://api.deepseek.com`)
 - `SUPABASE_URL`: Required - Supabase project URL
 - `SUPABASE_KEY`: Required - Supabase service role key
 - `SUPABASE_ANON_KEY`: Required - Supabase anonymous key

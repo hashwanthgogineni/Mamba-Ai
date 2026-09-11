@@ -10,7 +10,6 @@ import {
   useLocation,
 } from "react-router-dom";
 
-import Homepage from "./pages/Homepage";
 import Index from "./pages/Index";
 import NotFound from "./pages/NotFound";
 import ChatInterface from "@/components/ChatInterface";
@@ -28,17 +27,26 @@ const AppContent = () => {
   const location = useLocation();
 
   // hide header on sign in page and chat pages
-  const hideHeader = location.pathname === "/signin" || 
-                      location.pathname === "/chat" || 
-                      location.pathname === "/chat-main" || 
-                      location.pathname === "/chat-dashboard";
+  // Pages that render their own <Header /> must not also get the global one.
+  const hideHeader = ["/", "/signin", "/chat", "/chat-main", "/chat-dashboard"].includes(
+    location.pathname
+  );
 
   return (
     <>
       {!hideHeader && <Header />}
       <Routes>
         {/* Public pages */}
-        <Route path="/" element={<Homepage />} />
+        {/* Homepage disabled for now — "/" boots straight into the builder.
+            The component is kept so it can be re-enabled by restoring this route. */}
+        <Route
+          path="/"
+          element={
+            <ProtectedRoute>
+              <GamoraAIMain />
+            </ProtectedRoute>
+          }
+        />
         <Route 
           path="/index" 
           element={

@@ -66,3 +66,11 @@ __pycache__/
 .env.local
 .env.*.local
 core/.env
+
+# Generated Godot projects, exports and downloaded art (regenerable, ~700MB)
+core/godot_projects/
+core/local_storage/
+core/asset_cache/
+godot_projects/
+local_storage/
+asset_cache/

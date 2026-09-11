@@ -221,9 +221,11 @@ Generate complete, working Three.js 3D game code. Make it fun and engaging!
             try:
                 logger.info(f"Generating {component_type} (attempt {attempt + 1}/{max_retries})...")
                 
-                # Use very low temperature for consistent, high-quality code
-                # Max tokens capped at 8192 (API limit)
-                response = await self.deepseek.generate(messages, temperature=0.05, max_tokens=8192)
+                # Low temperature for consistent, high-quality code.
+                # V4.1-Flash allows up to 384K output. Thinking mode spends
+                # part of this budget on reasoning before writing any code,
+                # so the cap has to cover both the reasoning and the game.
+                response = await self.deepseek.generate(messages, temperature=0.05, max_tokens=65536)
                 content = response.get('content', '')
                 
                 # Check for empty content

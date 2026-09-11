@@ -1,14 +1,21 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { motion } from 'framer-motion';
-import { Send, Download, Paperclip, Gamepad2 } from 'lucide-react';
+import { ArrowUp, Download, Paperclip, Gamepad2 } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import { useLocation } from 'react-router-dom';
 import { apiClient, ProgressUpdate } from '@/lib/api';
 import Header from '@/components/Header';
+import GenerationLoader from '@/components/GenerationLoader';
+import ChatMessage from '@/components/ChatMessage';
+import { AUTH_ENABLED } from '@/lib/authConfig';
 
 interface Message {
   text: string;
   sender: 'user' | 'bot';
   timestamp?: Date;
+  /** Placeholder turn that shows a spinner until the real reply lands. */
+  thinking?: boolean;
 }
 
 export default function GamoraAIDashboard() {
@@ -29,7 +36,6 @@ export default function GamoraAIDashboard() {
   const [currentStatus, setCurrentStatus] = useState<string>('');
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(projectId || null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [gameHtmlContent, setGameHtmlContent] = useState<string | null>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -40,11 +46,37 @@ export default function GamoraAIDashboard() {
   };
 
   const addBotMessage = useCallback((text: string) => {
-    setMessages((prev) => [...prev, { 
-      text, 
-      sender: 'bot', 
-      timestamp: new Date() 
+    setMessages((prev) => [...prev, {
+      text,
+      sender: 'bot',
+      timestamp: new Date()
     }]);
+  }, []);
+
+  /** Append a spinner turn, or retarget the existing one with new status text. */
+  const setThinking = useCallback((text: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.thinking);
+      if (idx === -1) {
+        return [...prev, { text, sender: 'bot', timestamp: new Date(), thinking: true }];
+      }
+      const next = [...prev];
+      next[idx] = { ...next[idx], text };
+      return next;
+    });
+  }, []);
+
+  /** Turn the spinner turn into the final reply, so the answer lands in place. */
+  const resolveThinking = useCallback((text: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.thinking);
+      if (idx === -1) {
+        return [...prev, { text, sender: 'bot', timestamp: new Date() }];
+      }
+      const next = [...prev];
+      next[idx] = { text, sender: 'bot', timestamp: new Date(), thinking: false };
+      return next;
+    });
   }, []);
 
   const handleWebSocketUpdate = useCallback((update: ProgressUpdate) => {
@@ -53,7 +85,7 @@ export default function GamoraAIDashboard() {
     switch (update.type) {
       case 'connected':
         setCurrentStatus('Game Generation In Progress...');
-        // Don't add message to chat - keep static message
+        setThinking('Reading your idea...');
         break;
         
       case 'progress':
@@ -62,8 +94,8 @@ export default function GamoraAIDashboard() {
         const displayText = message || status || 'Processing...';
         if (displayText) {
           setCurrentStatus(displayText);
+          setThinking(displayText);
         }
-        // Don't add to chat - keep static message
         if (step) {
           setIsLoading(true);
         }
@@ -78,9 +110,8 @@ export default function GamoraAIDashboard() {
           setCurrentProjectId(project_id);
           // Fetch preview URL if not in update
           if (previewUrlFromUpdate) {
-            setPreviewUrl(previewUrlFromUpdate);
-            // Load HTML content directly for better rendering
-            loadGameHtml(previewUrlFromUpdate);
+            // Same URL after an edit, so force the iframe to refetch.
+            setPreviewUrl(`${previewUrlFromUpdate}${previewUrlFromUpdate.includes('?') ? '&' : '?'}v=${Date.now()}`);
           } else {
             // Fetch preview URL from API
             fetchPreviewUrl(project_id);
@@ -88,7 +119,9 @@ export default function GamoraAIDashboard() {
         }
         // Update chat with completion message (only once)
         if (!completionMessageAddedRef.current) {
-          addBotMessage('Enjoy the Game and let me know if you need any changes on it?');
+          resolveThinking(
+            'Your game is ready — it is running on the right.\n\nTell me what to change and I will build it again.'
+          );
           completionMessageAddedRef.current = true;
         }
         break;
@@ -96,17 +129,17 @@ export default function GamoraAIDashboard() {
       case 'error':
         setIsLoading(false);
         setCurrentStatus('Failed');
-        addBotMessage(`❌ Error: ${update.data.error || 'Generation failed'}`);
+        resolveThinking(`**Generation failed.** ${update.data.error || 'Something went wrong.'}`);
         break;
     }
-  }, [addBotMessage]);
+  }, [addBotMessage, setThinking, resolveThinking]);
 
   // Initialize with user message and connect to WebSocket
   useEffect(() => {
     if (initialMessage && messages.length === 0) {
       setMessages([
         { text: initialMessage, sender: 'user', timestamp: new Date() },
-        { text: 'Cooking the game! please wait a bit...', sender: 'bot', timestamp: new Date() }
+        { text: 'Cooking your game...', sender: 'bot', timestamp: new Date(), thinking: true }
       ]);
     }
 
@@ -146,26 +179,32 @@ export default function GamoraAIDashboard() {
       // Reset completion message flag for new generation
       completionMessageAddedRef.current = false;
       
-      // Add initial bot message
+      // A follow-up EDITS the game already on screen. Only the very first
+      // message — when there is no project yet — creates a new game.
+      const isFollowUp = Boolean(currentProjectId);
+
       setMessages((prev) => [
         ...prev,
-        { text: 'Cooking the game! please wait a bit...', sender: 'bot', timestamp: new Date() }
+        {
+          text: isFollowUp ? 'Applying your change...' : 'Cooking your game...',
+          sender: 'bot',
+          timestamp: new Date(),
+          thinking: true,
+        },
       ]);
-      
-      // Call backend API to generate new game
-      const response = await apiClient.generateGame({
-        prompt: userPrompt,
-      });
 
-      // Connect to WebSocket for this new project
+      const response = isFollowUp
+        ? await apiClient.iterateGame(currentProjectId as string, userPrompt)
+        : await apiClient.generateGame({ prompt: userPrompt });
+
       if (wsRef.current) {
         wsRef.current.close();
       }
 
-      // Update project ID
       setCurrentProjectId(response.project_id);
-      setPreviewUrl(null); // Reset preview URL for new game
-      setGameHtmlContent(null); // Reset HTML content
+      // Keep the current preview up while an edit builds; only a brand new
+      // game should blank the panel.
+      if (!isFollowUp) setPreviewUrl(null);
 
       apiClient.createWebSocketConnection(response.project_id, (update: ProgressUpdate) => {
         handleWebSocketUpdate(update);
@@ -174,12 +213,12 @@ export default function GamoraAIDashboard() {
         setCurrentStatus('Starting generation...');
       }).catch((error) => {
         console.error('Failed to connect WebSocket:', error);
-        addBotMessage('❌ Failed to connect to real-time updates');
+        resolveThinking('**Lost the live connection.** Your game may still be building — reload to check.');
         setIsLoading(false);
       });
     } catch (error: any) {
       console.error('Failed to generate game:', error);
-      addBotMessage(`❌ Error: ${error.message || 'Failed to start generation'}`);
+      resolveThinking(`**Could not start generation.** ${error.message || 'Please try again.'}`);
       setIsLoading(false);
     }
   };
@@ -204,8 +243,8 @@ export default function GamoraAIDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      if (!token) {
-        addBotMessage('❌ Please sign in to download games.');
+      if (!token && AUTH_ENABLED) {
+        addBotMessage('Please sign in to download games.');
         return;
       }
 
@@ -217,9 +256,7 @@ export default function GamoraAIDashboard() {
       addBotMessage('Downloading game files...');
       
       const response = await fetch(downloadUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
 
       if (!response.ok) {
@@ -286,8 +323,8 @@ export default function GamoraAIDashboard() {
       const { data: { session } } = await supabase.auth.getSession();
       const token = session?.access_token;
 
-      if (!token) {
-        addBotMessage('❌ Please sign in to download games.');
+      if (!token && AUTH_ENABLED) {
+        addBotMessage('Please sign in to download games.');
         return;
       }
 
@@ -299,9 +336,7 @@ export default function GamoraAIDashboard() {
       addBotMessage('⏳ Downloading game file...');
       
       const response = await fetch(downloadUrl, {
-        headers: {
-          'Authorization': `Bearer ${token}`
-        }
+        headers: token ? { 'Authorization': `Bearer ${token}` } : {}
       });
 
       if (!response.ok) {
@@ -361,37 +396,18 @@ export default function GamoraAIDashboard() {
       const project = await apiClient.getProject(projectId);
       if (project.web_preview_url) {
         setPreviewUrl(project.web_preview_url);
-        // Also try to load HTML content directly for better rendering
-        await loadGameHtml(project.web_preview_url);
       } else {
         // Fallback: construct preview URL from project ID
         const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
         const previewUrl = `${API_BASE_URL}/api/v1/generate/preview/${projectId}`;
         setPreviewUrl(previewUrl);
-        await loadGameHtml(previewUrl);
       }
     } catch (error) {
       console.error('Failed to fetch preview URL:', error);
       // Fallback: construct preview URL from project ID
       const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
       const previewUrl = `${API_BASE_URL}/api/v1/generate/preview/${projectId}`;
-      setPreviewUrl(previewUrl);
-      await loadGameHtml(previewUrl);
-    }
-  };
-
-  const loadGameHtml = async (url: string) => {
-    try {
-      const response = await fetch(url);
-      if (response.ok) {
-        const html = await response.text();
-        setGameHtmlContent(html);
-        console.log('✅ Loaded game HTML content');
-      } else {
-        console.error('Failed to load game HTML:', response.status);
-      }
-    } catch (error) {
-      console.error('Error loading game HTML:', error);
+        setPreviewUrl(previewUrl);
     }
   };
 
@@ -428,85 +444,94 @@ export default function GamoraAIDashboard() {
           {messages.length === 0 && !isLoading && (
             <div className="flex flex-col justify-center items-center h-full text-white text-center">
               <p className="text-lg mb-2 font-light">Start building your next game</p>
-              <p className="text-sm font-light">Describe your idea and Gamora will generate code for you.</p>
+              <p className="text-sm font-light">Describe your idea and Mamba will generate code for you.</p>
             </div>
           )}
           {messages.map((msg, i) => (
-            <motion.div
+            <ChatMessage
               key={i}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.2 }}
-              className={`p-4 rounded-2xl max-w-[85%] leading-relaxed shadow-sm border border-border/50 bg-black text-white text-sm font-light tracking-wide ${
-                msg.sender === 'user' ? 'ml-auto' : ''
-              }`}
-            >
-              {msg.text}
-            </motion.div>
+              message={msg.text}
+              isUser={msg.sender === 'user'}
+              isThinking={msg.thinking}
+            />
           ))}
           <div ref={chatEndRef} />
         </div>
 
-        <div className="flex items-center gap-3 mt-4 bg-black border border-border/50 rounded-3xl shadow-lg p-4 backdrop-blur-sm">
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-          />
-          <Paperclip
-            size={18}
-            className={`transition ${
-              isLoading 
-                ? 'text-gray-500 cursor-not-allowed opacity-50' 
-                : 'text-[#25D366] cursor-pointer hover:text-[#128C7E]'
-            }`}
-            onClick={isLoading ? undefined : handleAttachClick}
-          />
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && !isLoading && handleSend()}
-            disabled={isLoading}
-            className="flex-1 bg-black text-white placeholder-gray-400 text-[16px] focus:outline-none font-light border-none outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-            placeholder="Describe your idea..."
-          />
-          <button
-            onClick={handleSend}
-            disabled={isLoading}
-            className={`p-3 rounded-sm shadow-md transition-all border-none outline-none ${
-              isLoading
-                ? 'bg-gray-600 cursor-not-allowed opacity-50'
-                : 'bg-[#25D366] active:scale-95 cursor-pointer hover:scale-105 hover:shadow-lg'
-            }`}
+        {/* Composer — scales gently on focus, actions pinned bottom-right */}
+        <div className="mt-4">
+          <div
+            className={`relative origin-bottom transition-all duration-300 ease-out md:focus-within:scale-[1.02]
+              bg-zinc-900/50 backdrop-blur-sm rounded-lg border border-white/30
+              shadow-[0_-15px_40px_rgba(0,0,0,0.8)] p-2 sm:p-4
+              ${isLoading ? 'opacity-50' : ''}`}
           >
-            <Send size={18} className="text-black" />
-          </button>
+            <Textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  if (!isLoading) handleSend();
+                }
+              }}
+              disabled={isLoading}
+              placeholder={isLoading ? 'Building your game...' : 'Describe your idea...'}
+              className="min-h-[80px] sm:min-h-[100px] py-2 sm:py-3 px-2 sm:px-4 text-sm sm:text-base
+                resize-none border-0 bg-transparent pr-16 sm:pr-24
+                focus-visible:ring-0 focus-visible:ring-offset-0
+                text-white font-medium placeholder:text-gray-400 placeholder:font-normal
+                disabled:cursor-not-allowed"
+            />
+
+            <input type="file" ref={fileInputRef} className="hidden" />
+
+            <div className="absolute bottom-2 sm:bottom-3 right-2 sm:right-3 flex items-center gap-1 sm:gap-2">
+              <motion.div
+                className="inline-flex"
+                whileHover={{ scale: 1.12 }}
+                whileTap={{ scale: 0.85 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 12 }}
+              >
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-9 w-9 sm:h-8 sm:w-8 rounded-sm border border-white/20 hover:bg-zinc-800"
+                  onClick={handleAttachClick}
+                  disabled={isLoading}
+                  aria-label="Attach a file"
+                >
+                  <Paperclip className="h-4 w-4 sm:h-3.5 sm:w-3.5 text-white" />
+                </Button>
+              </motion.div>
+
+              <motion.div
+                className="inline-flex"
+                whileHover={{ scale: 1.12 }}
+                whileTap={{ scale: 0.85 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 12 }}
+              >
+                <Button
+                  onClick={handleSend}
+                  size="icon"
+                  disabled={isLoading || !input.trim()}
+                  className="h-9 w-9 sm:h-8 sm:w-8 bg-[#25D366] hover:bg-[#4ae389] text-black
+                    rounded-sm border-none shadow-none
+                    disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Send"
+                >
+                  <ArrowUp className="h-4 w-4 sm:h-3.5 sm:w-3.5" />
+                </Button>
+              </motion.div>
+            </div>
+          </div>
         </div>
       </div>
 
       {/* Right Preview Panel */}
       <div className="w-[65%] flex flex-col items-center justify-center bg-black relative">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center h-full w-full">
-            <div className="flex flex-col items-center mb-4">
-              <p className="text-white text-xl font-light">{currentStatus || 'Cooking your Game...'}</p>
-              <p className="text-gray-400 text-sm font-light mt-1">(Might take 3-4 minutes)</p>
-            </div>
-            <div className="border border-[#25D366] rounded-sm p-[3px] w-[260px]">
-              <div className="flex gap-[3px] bg-black p-[2px]">
-                {Array.from({ length: 15 }).map((_, i) => (
-                  <motion.div
-                    key={i}
-                    initial={{ opacity: 0.2 }}
-                    animate={{ opacity: [0.2, 1, 0.2] }}
-                    transition={{ duration: 1, repeat: Infinity, delay: i * 0.1 }}
-                    className="w-[14px] h-[14px] bg-[#25D366]"
-                  />
-                ))}
-              </div>
-            </div>
-          </div>
+          <GenerationLoader status={currentStatus} />
         ) : (
           <motion.div
             initial={{ opacity: 0, scale: 0.95 }}
@@ -532,53 +557,24 @@ export default function GamoraAIDashboard() {
                   </button>
                 </div>
                 <div className="flex-1 w-full px-6 pt-6 pb-6 relative flex items-center justify-center">
-                  {gameHtmlContent ? (
-                    // Render HTML directly in a sandboxed iframe using srcdoc
-                    <iframe
-                      key={previewUrl}
-                      srcDoc={gameHtmlContent}
-                      className="w-full h-full max-w-full max-h-full border-0 rounded-lg bg-black"
-                      title="Game Preview"
-                      allow="gamepad; fullscreen; autoplay; microphone; camera"
-                      sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-presentation"
-                      style={{ 
-                        border: 'none',
-                        display: 'block',
-                        width: '100%',
-                        height: '100%',
-                        minHeight: '500px'
-                      }}
-                      onLoad={() => {
-                        console.log('✅ Game rendered successfully');
-                      }}
-                      onError={(e) => {
-                        console.error('❌ Game render error:', e);
-                      }}
-                    />
-                  ) : (
-                    // Fallback to URL-based iframe if HTML content not loaded
-                    <iframe
-                      key={previewUrl}
-                      src={previewUrl}
-                      className="w-full h-full max-w-full max-h-full border-0 rounded-lg bg-black"
-                      title="Game Preview"
-                      allow="gamepad; fullscreen; autoplay; microphone; camera"
-                      sandbox="allow-same-origin allow-scripts allow-forms allow-popups allow-modals allow-downloads allow-presentation"
-                      style={{ 
-                        border: 'none',
-                        display: 'block',
-                        width: '100%',
-                        height: '100%',
-                        minHeight: '500px'
-                      }}
-                      onLoad={() => {
-                        console.log('✅ Iframe loaded successfully:', previewUrl);
-                      }}
-                      onError={(e) => {
-                        console.error('❌ Iframe load error:', e);
-                      }}
-                    />
-                  )}
+                  <iframe
+                    key={previewUrl}
+                    src={previewUrl}
+                    className="w-full h-full max-w-full max-h-full border-0 rounded-lg bg-black"
+                    title="Game Preview"
+                    allow="gamepad; fullscreen; autoplay; cross-origin-isolated"
+                    // No allow-same-origin: the game is model-written code and
+                    // must not reach this app's origin or its localStorage.
+                    sandbox="allow-scripts allow-pointer-lock allow-downloads"
+                    style={{
+                      border: 'none',
+                      display: 'block',
+                      width: '100%',
+                      height: '100%',
+                      minHeight: '500px'
+                    }}
+                    onLoad={() => console.log('Game loaded:', previewUrl)}
+                  />
                 </div>
               </>
             ) : currentProjectId ? (

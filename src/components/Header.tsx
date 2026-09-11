@@ -5,10 +5,15 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/lib/supabase";
 
+// Once you are inside the app the call-to-action is noise: you are already
+// doing the thing it invites you to do.
+const APP_ROUTES = ["/", "/chat-main", "/chat-dashboard", "/chat", "/index"];
+
 const Header = () => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user, loading } = useAuth();
+  const inApp = APP_ROUTES.includes(location.pathname);
 
   const handleGetStarted = () => {
     if (location.pathname === "/") {
@@ -40,7 +45,7 @@ const Header = () => {
               "
               title="Go to homepage"
             >
-              Gamora AI
+              Mamba
             </h1>
           </div>
 
@@ -65,7 +70,7 @@ const Header = () => {
                   <LogOut className="h-5 w-5 text-green-500" />
                 </div>
               </div>
-            ) : (
+            ) : inApp ? null : (
               <Button
                 variant="default"
                 size="sm"

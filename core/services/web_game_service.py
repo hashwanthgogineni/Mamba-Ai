@@ -13,6 +13,22 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 
+def _public_url_for(storage_service: Any, path: str) -> str:
+    """
+    Browser-reachable URL for a stored file.
+
+    Local storage knows its own URL shape; the Supabase service does not, so
+    fall back to building the public-object URL for it.
+    """
+    if hasattr(storage_service, "public_url"):
+        return storage_service.public_url(path)
+
+    from config.settings import Settings
+    settings = Settings()
+    base = settings.supabase_url.rstrip("/")
+    return f"{base}/storage/v1/object/public/{storage_service.bucket}/{path}"
+
+
 class WebGameService:
     
     def __init__(
@@ -93,14 +109,13 @@ class WebGameService:
             # Use direct Supabase Storage URL for preview (better for iframe embedding)
             # The proxy endpoint can have issues with iframe rendering
             preview_url = deployment_url
-            if not preview_url:
-                # Fallback: construct direct Supabase Storage URL
-                from config.settings import Settings
-                settings = Settings()
-                supabase_url = settings.supabase_url.rstrip('/')
-                bucket = storage_service.bucket
-                preview_url = f"{supabase_url}/storage/v1/object/public/{bucket}/web_games/{project_id}/index.html"
-                logger.info(f"Using direct Supabase URL for preview: {preview_url}")
+            if not preview_url and storage_service:
+                # Ask the storage backend for the browser-reachable URL rather
+                # than assuming Supabase — local mode serves from this backend.
+                preview_url = _public_url_for(
+                    storage_service, f"web_games/{project_id}/index.html"
+                )
+                logger.info(f"Preview URL: {preview_url}")
             
             return {
                 "success": True,
@@ -1056,12 +1071,9 @@ export default gameConfig;
                         logger.error(f"❌ Failed to upload index.html: {e}")
             
             # Get public URL for index.html (preview URL)
-            from config.settings import Settings
-            settings = Settings()
-            supabase_url = settings.supabase_url.rstrip('/')
-            bucket = storage_service.bucket
-            
-            preview_url = f"{supabase_url}/storage/v1/object/public/{bucket}/web_games/{project_id}/index.html"
+            preview_url = _public_url_for(
+                storage_service, f"web_games/{project_id}/index.html"
+            )
             
             logger.info(f"✅ Uploaded {len(uploaded_files)} files to Supabase")
             if index_uploaded:

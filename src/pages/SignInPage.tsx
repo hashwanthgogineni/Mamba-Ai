@@ -116,7 +116,7 @@ const SignInPage = () => {
           <div className="space-y-2">
             <div className="flex justify-center mb-6">
               <h1 className="text-4xl font-logo font-light text-[#25D366]">
-                Gamora
+                Mamba
               </h1>
             </div>
             <h2 className="text-3xl font-light tracking-tight text-center text-white">
@@ -224,7 +224,7 @@ const SignInPage = () => {
       <div className="hidden lg:flex lg:w-1/2 items-center justify-center bg-black relative overflow-hidden">
         <img 
           src="/auth_image.jpg" 
-          alt="Gamora AI Authentication" 
+          alt="Mamba Authentication" 
           className="w-full h-full object-cover"
         />
       </div>

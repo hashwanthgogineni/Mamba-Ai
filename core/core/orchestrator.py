@@ -228,9 +228,21 @@ class MasterOrchestrator:
         storage_service,
         ws_manager=None,
         web_game_service=None,
-        enable_ai_assets: bool = False  # DALL-E disabled - using DeepSeek for descriptions only
+        enable_ai_assets: bool = False,  # DALL-E disabled - using DeepSeek for descriptions only
+        deepseek_model: str = None,
+        deepseek_base_url: str = None,
+        deepseek_thinking: bool = None,
+        deepseek_reasoning_effort: str = None,
+        game_engine: str = "html5",
+        godot_builder=None
     ):
-        self.deepseek = DeepSeekClient(deepseek_api_key)
+        self.deepseek = DeepSeekClient(
+            deepseek_api_key,
+            model=deepseek_model,
+            base_url=deepseek_base_url,
+            thinking=deepseek_thinking,
+            reasoning_effort=deepseek_reasoning_effort
+        )
         self.cache = cache_manager
         self.web_game = web_game_service
         self.storage = storage_service
@@ -244,8 +256,10 @@ class MasterOrchestrator:
         )
         
         self.use_template_system = False
-        
-        logger.info("Master Orchestrator initialized")
+        self.game_engine = (game_engine or "html5").lower()
+        self.godot = godot_builder
+
+        logger.info(f"Master Orchestrator initialized (engine={self.game_engine})")
     
     async def initialize(self):
         logger.info("🚀 Initializing orchestrator...")
@@ -260,7 +274,9 @@ class MasterOrchestrator:
         project_id: str,
         user_prompt: str,
         user_tier: str = "free",
-        db_manager = None
+        db_manager = None,
+        genre_id: str = None,
+        answers: Dict[str, str] = None
     ) -> Dict[str, Any]:
         logger.info(f"Starting game generation for: {project_id}")
         
@@ -277,6 +293,17 @@ class MasterOrchestrator:
             if not self.web_game:
                 raise ValueError("Web game service is required")
             
+            if self.game_engine == "godot":
+                if not self.godot:
+                    raise ValueError(
+                        "GAME_ENGINE=godot but the Godot builder is unavailable. "
+                        "Check GODOT_PATH and that export templates are installed."
+                    )
+                return await self._generate_with_godot(
+                    project_id, user_prompt, db_manager, start_time,
+                    genre_id=genre_id, answers=answers
+                )
+
             # Detect dimension from user prompt
             from utils.dimension_detector import DimensionDetector
             detected_dimension = DimensionDetector.detect_dimension(user_prompt)
@@ -327,7 +354,7 @@ class MasterOrchestrator:
             }
             
             await self._log_step(db_manager, project_id, "game_generation", "success",
-                               ai_model="deepseek-chat", metadata={"method": "direct_ai_generation"})
+                               ai_model=self.deepseek.model, metadata={"method": "direct_ai_generation"})
             
             if not build_result.get('success'):
                 logger.warning(f"Game build failed or skipped: {build_result.get('error')}")
@@ -397,6 +424,175 @@ class MasterOrchestrator:
                 "timestamp": datetime.utcnow().isoformat()
             }
     
+    async def iterate_game(
+        self,
+        project_id: str,
+        change_request: str,
+        db_manager=None
+    ) -> Dict[str, Any]:
+        """Apply a change to an existing game instead of rebuilding it."""
+        start_time = datetime.utcnow()
+
+        if self.game_engine != "godot" or not self.godot:
+            return {"success": False, "project_id": project_id,
+                    "error": "Iteration requires the Godot engine."}
+
+        async def progress(message: str):
+            await self._update_status(project_id, "building", message)
+
+        build = await self.godot.iterate(project_id, change_request, progress=progress)
+
+        if not build.get("success"):
+            error = build.get("error", "Could not apply the change")
+            await self._update_status(project_id, "failed", error)
+            return {"success": False, "project_id": project_id, "error": error,
+                    "timestamp": datetime.utcnow().isoformat()}
+
+        await self._update_status(project_id, "uploading", "Publishing your changes...")
+        preview_url = await self._publish_dist(project_id, build["dist_path"])
+
+        if db_manager:
+            await db_manager.update_project(
+                project_id, status="completed",
+                web_preview_url=preview_url, completed_at=datetime.utcnow(),
+            )
+
+        await self._update_status(project_id, "completed", "Your changes are live!")
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        logger.info(f"Iterated game in {duration:.1f}s: {project_id} ({build.get('files')})")
+
+        return {
+            "success": True, "project_id": project_id,
+            "changed_files": build.get("files", []),
+            "web_preview_url": preview_url, "preview_url": preview_url,
+            "builds": {"web": preview_url},
+            "iterated": True,
+            "duration_seconds": duration,
+            "timestamp": datetime.utcnow().isoformat(),
+        }
+
+    async def _generate_with_godot(
+        self,
+        project_id: str,
+        user_prompt: str,
+        db_manager,
+        start_time,
+        genre_id: str = None,
+        answers: Dict[str, str] = None
+    ) -> Dict[str, Any]:
+        """Generate a Godot project, validate it in the engine, export for web."""
+
+        async def progress(message: str):
+            await self._update_status(project_id, "building", message)
+
+        from services.ai_game_clarifier import build_brief
+        brief = build_brief(user_prompt, genre_id, answers)
+
+        build = await self.godot.build(
+            project_id, user_prompt, progress=progress,
+            genre_id=genre_id, brief=brief
+        )
+
+        if not build.get("success"):
+            error = build.get("error", "Godot build failed")
+            await self._update_status(project_id, "failed", f"Generation failed: {error}")
+            if db_manager:
+                await db_manager.update_project(project_id, status="failed")
+                await self._log_step(db_manager, project_id, "godot_build", "failed", error=error)
+            return {
+                "success": False,
+                "project_id": project_id,
+                "error": error,
+                "timestamp": datetime.utcnow().isoformat(),
+            }
+
+        await self._update_status(project_id, "uploading", "Publishing your game...")
+        preview_url = await self._publish_dist(project_id, build["dist_path"])
+
+        ai_content = {
+            "engine": "godot",
+            "plan": build.get("plan", {}),
+            "files": build.get("files", []),
+            "validation_passed": build.get("validation_passed"),
+            "issues": build.get("issues", []),
+            "user_prompt": user_prompt,
+        }
+
+        if db_manager:
+            await db_manager.update_project(
+                project_id,
+                status="completed",
+                ai_content=ai_content,
+                web_preview_url=preview_url,
+                completed_at=datetime.utcnow(),
+            )
+            await db_manager.create_build(
+                project_id, "web", preview_url,
+                web_preview_url=preview_url, status="completed"
+            )
+            await self._log_step(
+                db_manager, project_id, "godot_build", "success",
+                ai_model=self.deepseek.model,
+                metadata={"validation_passed": build.get("validation_passed")},
+            )
+
+        await self._update_status(project_id, "completed", "Your game is ready!")
+        duration = (datetime.utcnow() - start_time).total_seconds()
+        logger.info(f"Godot game generated in {duration:.1f}s: {project_id}")
+
+        return {
+            "success": True,
+            "project_id": project_id,
+            "ai_content": ai_content,
+            "builds": {"web": preview_url},
+            "web_preview_url": preview_url,
+            "preview_url": preview_url,
+            "duration_seconds": duration,
+            "timestamp": datetime.utcnow().isoformat(),
+            "validation_warnings": build.get("issues", []),
+        }
+
+    async def _publish_dist(self, project_id: str, dist_path: str) -> Optional[str]:
+        """Upload every file of the web export, preserving the directory shape."""
+        from pathlib import Path as _Path
+        import mimetypes
+
+        dist = _Path(dist_path)
+        if not dist.exists():
+            logger.error(f"Export directory missing: {dist}")
+            return None
+
+        uploaded = 0
+        for file in sorted(dist.rglob("*")):
+            if not file.is_file():
+                continue
+            rel = file.relative_to(dist).as_posix()
+            content_type = mimetypes.guess_type(rel)[0] or "application/octet-stream"
+            if rel.endswith(".wasm"):
+                content_type = "application/wasm"
+            try:
+                await self.storage.upload_file(
+                    f"web_games/{project_id}/{rel}",
+                    file.read_bytes(),
+                    content_type=content_type,
+                    public=True,
+                )
+                uploaded += 1
+            except Exception as e:
+                logger.error(f"Failed to publish {rel}: {e}")
+
+        logger.info(f"📤 Published {uploaded} file(s) for {project_id}")
+        return self._preview_url_for(project_id)
+
+    def _preview_url_for(self, project_id: str) -> str:
+        path = f"web_games/{project_id}/index.html"
+        if hasattr(self.storage, "public_url"):
+            return self.storage.public_url(path)
+        from config.settings import Settings
+        settings = Settings()
+        base = settings.supabase_url.rstrip("/")
+        return f"{base}/storage/v1/object/public/{self.storage.bucket}/{path}"
+
     async def _analyze_intent(self, user_prompt: str) -> Dict:
         """Step 1: Analyze user intent - DISABLED: AI not used, fallback only"""
         # TEMPLATE-ONLY MODE: Skip AI, use fallback

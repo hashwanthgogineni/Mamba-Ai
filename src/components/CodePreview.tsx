@@ -34,7 +34,7 @@ const CodePreview = () => {
     { name: "audio/", type: "folder", icon: Music, count: "2 files" },
   ];
 
-  const sampleCode = `// Game Engine - Gamora AI Generated
+  const sampleCode = `// Game Engine - Mamba Generated
 class GamoraGame {
   constructor(canvas) {
     this.canvas = canvas;

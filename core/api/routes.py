@@ -33,6 +33,17 @@ class GenerateGameRequest(BaseModel):
     prompt: str
     title: Optional[str] = None
     description: Optional[str] = None
+    genre: Optional[str] = None
+    answers: Optional[dict] = None
+
+
+class ClarifyRequest(BaseModel):
+    prompt: str
+
+
+class IterateRequest(BaseModel):
+    project_id: str
+    prompt: str
 
 class ProjectResponse(BaseModel):
     project_id: str
@@ -69,20 +80,46 @@ def get_component(components: dict, key: str, required: bool = True):
     return components[key]
 
 
+# Identity used for every request while AUTH_ENABLED is false, so projects
+# still get a stable owner and the DB's user_id column stays satisfied.
+DEV_USER = {
+    "user_id": "00000000-0000-0000-0000-000000000000",
+    "email": "dev@localhost",
+    "role": "authenticated"
+}
+
+
+def auth_is_enabled(components: dict) -> bool:
+    settings = components.get('settings')
+    return getattr(settings, 'auth_enabled', True) if settings else True
+
+
 async def get_current_user(
     authorization: Optional[str] = Header(None),
     components = Depends(get_components)
 ):
-    if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    token = authorization.replace("Bearer ", "")
     auth_manager = components['auth']
+    token = authorization.replace("Bearer ", "") if (
+        authorization and authorization.startswith("Bearer ")
+    ) else None
+
+    if not auth_is_enabled(components):
+        # Still honour a real token when one is present, so that signing in
+        # keeps showing you your own projects rather than the dev user's.
+        if token:
+            user = auth_manager.get_current_user(token)
+            if user:
+                return user
+        return DEV_USER
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
     user = auth_manager.get_current_user(token)
-    
+
     if not user:
         raise HTTPException(status_code=401, detail="Invalid or expired token")
-    
+
     return user
 
 
@@ -117,6 +154,13 @@ async def get_me(current_user = Depends(get_current_user)):
     return current_user
 
 
+def _iso(value) -> str:
+    """created_at may be a datetime or an ISO string depending on backend."""
+    if value is None:
+        return ""
+    return value.isoformat() if hasattr(value, "isoformat") else str(value)
+
+
 @projects_router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(
     project_id: str,
@@ -140,7 +184,7 @@ async def get_project(
         "status": project['status'],
         "web_preview_url": project.get('web_preview_url'),  # May not exist if generation failed
         "builds": project.get('builds', {}),
-        "created_at": project['created_at'].isoformat()
+        "created_at": _iso(project.get('created_at'))
     }
 
 
@@ -166,10 +210,39 @@ async def list_projects(
             "status": p['status'],
             "web_preview_url": p.get('web_preview_url'),  # May not exist if generation failed
             "builds": p.get('builds', {}),
-            "created_at": p['created_at'].isoformat()
+            "created_at": _iso(p.get('created_at'))
         }
         for p in projects
     ]
+
+
+@generation_router.post("/clarify")
+async def clarify_game(
+    request: ClarifyRequest,
+    current_user = Depends(get_current_user),
+    components = Depends(get_components)
+):
+    """
+    Classify the request and return any questions worth asking first.
+
+    Usually returns zero questions — the bar is that two plausible answers
+    would produce materially different games. Naming a known game clears it.
+    """
+    try:
+        from services.ai_game_clarifier import GameClarifier
+        orchestrator = components['orchestrator']
+        result = await GameClarifier(orchestrator.deepseek).clarify(request.prompt)
+        return result
+    except Exception as e:
+        logger.error(f"Clarify failed: {e}", exc_info=True)
+        from services import game_genres
+        return {
+            "genre": game_genres.DEFAULT_GENRE,
+            "confidence": "low",
+            "summary": "",
+            "questions": [],
+            "options": game_genres.options(),
+        }
 
 
 @generation_router.post("/game")
@@ -221,7 +294,9 @@ async def generate_game(
                     project_id=project_id,
                     user_prompt=request.prompt,
                     user_tier="free",
-                    db_manager=db
+                    db_manager=db,
+                    genre_id=request.genre,
+                    answers=request.answers
                 )
                 
                 if result['success']:
@@ -299,6 +374,47 @@ async def generate_game(
         raise HTTPException(status_code=500, detail="Failed to start generation")
 
 
+@generation_router.post("/iterate")
+async def iterate_game(
+    request: IterateRequest,
+    current_user = Depends(get_current_user),
+    components = Depends(get_components)
+):
+    """Apply a change to an existing game, reusing its files and its project id."""
+    try:
+        orchestrator = components['orchestrator']
+        ws_manager = components['ws_manager']
+        db = components['db']
+        project_id = request.project_id
+
+        async def iteration_task():
+            try:
+                result = await orchestrator.iterate_game(project_id, request.prompt, db_manager=db)
+                if result.get('success'):
+                    preview = result.get('preview_url')
+                    await ws_manager.send_message(project_id, {
+                        "type": "complete",
+                        "data": {"project_id": project_id, "preview_url": preview,
+                                 "web_preview_url": preview, "iterated": True,
+                                 "changed_files": result.get('changed_files', [])},
+                    })
+                else:
+                    await ws_manager.send_message(project_id, {
+                        "type": "error", "data": {"error": result.get('error')}})
+            except Exception as e:
+                logger.error(f"Iteration task failed: {e}", exc_info=True)
+                await ws_manager.send_message(project_id, {
+                    "type": "error", "data": {"error": str(e)}})
+
+        asyncio.create_task(iteration_task())
+        return {"project_id": project_id, "status": "processing",
+                "message": "Applying your change.",
+                "websocket_url": f"/api/v1/generate/ws/{project_id}"}
+    except Exception as e:
+        logger.error(f"Iterate start error: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to start iteration")
+
+
 @generation_router.websocket("/ws/{project_id}")
 async def websocket_endpoint(
     websocket: WebSocket,
@@ -306,7 +422,7 @@ async def websocket_endpoint(
     token: Optional[str] = Query(None),
     components = Depends(get_components)
 ):
-    if token:
+    if token and auth_is_enabled(components):
         auth_manager = components['auth']
         user = auth_manager.get_current_user(token)
         if not user:
@@ -343,6 +459,65 @@ async def websocket_endpoint(
         ws_manager.disconnect(websocket, project_id)
 
 
+# Content types that matter for a Godot web export. A .wasm served as
+# octet-stream fails WebAssembly streaming compilation in every browser.
+_PLAY_MIME = {
+    ".html": "text/html; charset=utf-8",
+    ".js":   "text/javascript; charset=utf-8",
+    ".wasm": "application/wasm",
+    ".pck":  "application/octet-stream",
+    ".png":  "image/png",
+    ".jpg":  "image/jpeg",
+    ".svg":  "image/svg+xml",
+    ".json": "application/json",
+    ".css":  "text/css; charset=utf-8",
+    ".ogg":  "audio/ogg",
+    ".wav":  "audio/wav",
+}
+
+
+@generation_router.get("/play/{project_id}/{file_path:path}")
+async def play_game_file(
+    project_id: str,
+    file_path: str = "",
+    components = Depends(get_components)
+):
+    """
+    Serve any file from a generated game.
+
+    A Godot web export is a directory (index.html + .wasm + .pck + .js), not a
+    single file, so the preview cannot be injected via srcDoc the way the HTML5
+    build was. Serving it from a real path also means the iframe no longer needs
+    allow-same-origin.
+    """
+    storage_service = components['storage']
+    rel = (file_path or "index.html").lstrip("/")
+    if ".." in rel:
+        raise HTTPException(status_code=400, detail="Invalid path")
+
+    storage_path = f"web_games/{project_id}/{rel}"
+
+    try:
+        data = await storage_service.download_file(storage_path)
+    except Exception:
+        logger.debug(f"Not found: {storage_path}")
+        raise HTTPException(status_code=404, detail=f"Not found: {rel}")
+
+    suffix = Path(rel).suffix.lower()
+    media_type = _PLAY_MIME.get(suffix, "application/octet-stream")
+
+    return Response(
+        content=data,
+        media_type=media_type,
+        headers={
+            "Access-Control-Allow-Origin": "*",
+            # Godot loads its own .wasm/.pck from this origin.
+            "Cross-Origin-Resource-Policy": "cross-origin",
+            "Cache-Control": "public, max-age=300",
+        },
+    )
+
+
 @generation_router.get("/preview/{project_id}")
 async def proxy_game_preview(
     project_id: str,
@@ -364,21 +539,20 @@ async def proxy_game_preview(
             html_content = html_content_bytes.decode('utf-8')
             logger.info(f"✅ Found HTML5 game preview at {web_storage_path} ({len(html_content)} bytes)")
             
-            # Get Supabase public URL for web game assets (HTML5 games use root/assets)
-            from config.settings import Settings
-            settings = Settings()
-            supabase_url = settings.supabase_url.rstrip('/')
-            bucket = storage_service.bucket
-            asset_base_url = f"{supabase_url}/storage/v1/object/public/{bucket}/web_games/{project_id}"
-            
-            # For HTML5 games, ensure assets load correctly
-            # HTML5 games reference assets like ./assets/player.png
-            # We need to make sure the base URL is set correctly
-            if '<head>' in html_content and 'base href' not in html_content.lower():
-                # Add base tag for asset loading (only if not already present)
-                base_tag = f'<base href="{asset_base_url}/">'
-                html_content = html_content.replace('<head>', f'<head>\n    {base_tag}', 1)
-                logger.info("Added base tag for HTML5 asset loading")
+            # Only rewrite the asset base when the files live somewhere else
+            # (Supabase). In local mode they are served from this same origin,
+            # so relative paths already resolve and a <base> tag would break them.
+            if not hasattr(storage_service, 'public_url'):
+                from config.settings import Settings
+                settings = Settings()
+                supabase_url = settings.supabase_url.rstrip('/')
+                bucket = storage_service.bucket
+                asset_base_url = f"{supabase_url}/storage/v1/object/public/{bucket}/web_games/{project_id}"
+
+                if '<head>' in html_content and 'base href' not in html_content.lower():
+                    base_tag = f'<base href="{asset_base_url}/">'
+                    html_content = html_content.replace('<head>', f'<head>\n    {base_tag}', 1)
+                    logger.info("Added base tag for HTML5 asset loading")
             
         except Exception as web_error:
             logger.debug(f"Web game not found at {web_storage_path}: {web_error}")
@@ -389,16 +563,18 @@ async def proxy_game_preview(
                 html_content = html_content_bytes.decode('utf-8')
                 logger.info(f"Found web game in src directory ({len(html_content)} bytes)")
                 
-                from config.settings import Settings
-                settings = Settings()
-                supabase_url = settings.supabase_url.rstrip('/')
-                bucket = storage_service.bucket
-                asset_base_url = f"{supabase_url}/storage/v1/object/public/{bucket}/web_games/{project_id}/src"
+                asset_base_url = None
             except Exception as src_error:
                 logger.debug(f"Web game not found in dist or src: {web_error}, {src_error}")
                 html_content = None
         
         
+        if not html_content:
+            raise HTTPException(
+                status_code=404,
+                detail="Game preview not found. It may still be generating."
+            )
+
         # Serve with headers that allow inline styles/scripts and iframe embedding
         # Note: Removed X-Frame-Options to allow cross-origin embedding (frontend on 8080, backend on 8000)
         # Using CSP frame-ancestors instead for better control

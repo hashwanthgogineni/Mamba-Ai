@@ -1,14 +1,27 @@
 import { useState, useRef, useEffect } from 'react';
-import { Send, Plus } from 'lucide-react';
+import { ArrowUp, Plus } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { supabase } from '@/lib/supabase';
 import { apiClient } from '@/lib/api';
+import type { ClarifyQuestion } from '@/lib/api';
+import ClarifyQuestions from '@/components/ClarifyQuestions';
+import { AUTH_ENABLED } from '@/lib/authConfig';
 import Header from '@/components/Header';
 
 export default function GamoraAIMain() {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+
+  // Clarification state. While `questions` is non-empty nothing is being
+  // generated: no project exists yet and no build has started.
+  const [questions, setQuestions] = useState<ClarifyQuestion[]>([]);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [pendingPrompt, setPendingPrompt] = useState('');
+  const [genre, setGenre] = useState<string | undefined>(undefined);
+  const [summary, setSummary] = useState('');
+  const [thinking, setThinking] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
   const location = useLocation();
@@ -18,46 +31,86 @@ export default function GamoraAIMain() {
     fileInputRef.current?.click();
   };
 
+  /** Kick off the actual build. Only reached once questions are resolved. */
+  const startGeneration = async (
+    prompt: string,
+    chosenGenre?: string,
+    chosenAnswers?: Record<string, string>,
+  ) => {
+    setIsLoading(true);
+    setQuestions([]);
+    try {
+      const response = await apiClient.generateGame({
+        prompt,
+        genre: chosenGenre,
+        answers: chosenAnswers,
+      });
+
+      navigate('/chat-dashboard', {
+        state: {
+          initialMessage: prompt,
+          projectId: response.project_id,
+          websocketUrl: response.websocket_url,
+        },
+      });
+    } catch (error: any) {
+      console.error('Failed to generate game:', error);
+      toast({
+        title: 'Generation Failed',
+        description: error.message || 'Failed to start game generation. Please try again.',
+        variant: 'destructive',
+      });
+      setIsLoading(false);
+    }
+  };
+
   const handleSend = async () => {
-    if (input.trim() && !isLoading) {
-      setIsLoading(true);
-      
-      try {
-        // Check if user is authenticated
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          toast({
-            title: "Authentication Required",
-            description: "Please sign in to generate games",
-            variant: "destructive",
-          });
-          navigate('/signin');
-          setIsLoading(false);
-          return;
-        }
+    if (!input.trim() || isLoading || thinking) return;
 
-        // Call backend API to generate game
-        const response = await apiClient.generateGame({
-          prompt: input.trim(),
-        });
+    const prompt = input.trim();
 
-        // Navigate to dashboard with project ID
-        navigate('/chat-dashboard', { 
-          state: { 
-            initialMessage: input.trim(),
-            projectId: response.project_id,
-            websocketUrl: response.websocket_url,
-          } 
-        });
-      } catch (error: any) {
-        console.error('Failed to generate game:', error);
+    // Auth gate (skipped entirely when VITE_AUTH_ENABLED=false)
+    if (AUTH_ENABLED) {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
         toast({
-          title: "Generation Failed",
-          description: error.message || "Failed to start game generation. Please try again.",
-          variant: "destructive",
+          title: 'Authentication Required',
+          description: 'Please sign in to generate games',
+          variant: 'destructive',
         });
-        setIsLoading(false);
+        navigate('/signin');
+        return;
       }
+    }
+
+    // Ask first. This is cheap and creates nothing — if it comes back with
+    // questions we STOP here and wait, rather than building something the
+    // user then has to throw away.
+    setThinking(true);
+    setPendingPrompt(prompt);
+    try {
+      const clarification = await apiClient.clarifyGame(prompt);
+      setGenre(clarification.genre || undefined);
+      setSummary(clarification.summary || '');
+
+      if (clarification.questions && clarification.questions.length > 0) {
+        setQuestions(clarification.questions);
+        setAnswers({});
+        setInput('');
+        setThinking(false);
+        return; // ← paused. Nothing is generated until the user answers.
+      }
+
+      // Confident enough to build straight away.
+      setInput('');
+      setThinking(false);
+      await startGeneration(prompt, clarification.genre || undefined, undefined);
+    } catch (error) {
+      // A failed classification must never block building.
+      console.error('Clarify failed, building anyway:', error);
+      setInput('');
+      setThinking(false);
+      await startGeneration(prompt, undefined, undefined);
     }
   };
 
@@ -125,12 +178,24 @@ export default function GamoraAIMain() {
         {/* Header Section */}
         <div className="text-center mb-12 z-10">
         <h1 className="text-5xl font-bold mb-2 font-light">
-          Build something <span className="text-[#25D366]">Epic</span>
+          Build <span className="text-[#25D366]">2D</span> Games
         </h1>
-        <p className="text-gray-300 text-lg font-light">Create immersive games by chatting with AI</p>
+        <p className="text-gray-300 text-lg font-light">Create immersive games with AI</p>
       </div>
 
-      {/* Chat Input Section */}
+      {/* Questions take over the composer while we wait for answers */}
+      {questions.length > 0 ? (
+        <div className="flex flex-col items-center w-full max-w-2xl px-6 z-10">
+          <ClarifyQuestions
+            questions={questions}
+            answers={answers}
+            summary={summary}
+            onAnswer={(id, value) => setAnswers((prev) => ({ ...prev, [id]: value }))}
+            onSubmit={() => startGeneration(pendingPrompt, genre, answers)}
+            onSkip={() => startGeneration(pendingPrompt, genre, undefined)}
+          />
+        </div>
+      ) : (
       <div className="flex flex-col items-center w-full max-w-4xl px-6 z-10">
         <div className="relative w-full">
           {/* Large Input Box */}
@@ -144,7 +209,7 @@ export default function GamoraAIMain() {
             {/* Top: Placeholder/Input Area */}
             <div className="flex-1 flex items-start">
               <textarea
-                placeholder="Ask Gamora to build the game you want!"
+                placeholder={thinking ? "Reading your idea..." : "Ask Mamba to build the game you want!"}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
@@ -153,7 +218,7 @@ export default function GamoraAIMain() {
                     handleSend();
                   }
                 }}
-                disabled={isLoading}
+                disabled={isLoading || thinking}
                 className="flex-1 bg-transparent text-white placeholder-gray-400 text-lg focus:outline-none font-light border-none outline-none resize-none min-h-[120px] disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ lineHeight: '1.6' }}
               />
@@ -171,18 +236,23 @@ export default function GamoraAIMain() {
                 <span>Add files, images etc</span>
               </button>
               
-              {/* Right: Send button */}
-              <button
+              {/* Right: Send — spring zoom on hover, press on tap */}
+              <motion.button
                 onClick={handleSend}
-                disabled={isLoading || !input.trim()}
-                className="w-10 h-10 flex items-center justify-center bg-[#25D366] rounded-sm transition-all duration-200 cursor-pointer border-none outline-none hover:bg-[#20BA5A] active:scale-[0.96] disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-[#25D366]"
+                disabled={isLoading || thinking || !input.trim()}
+                whileHover={{ scale: 1.12 }}
+                whileTap={{ scale: 0.85 }}
+                transition={{ type: 'spring', stiffness: 500, damping: 12 }}
+                aria-label="Send"
+                className="w-9 h-9 flex items-center justify-center bg-[#25D366] rounded-sm cursor-pointer border-none outline-none hover:bg-[#4ae389] disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-[#25D366]"
               >
-                <Send size={18} className="text-black" />
-              </button>
+                <ArrowUp size={18} className="text-black" />
+              </motion.button>
             </div>
           </div>
         </div>
       </div>
+      )}
       </div>
     </div>
   );

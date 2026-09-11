@@ -1,3 +1,4 @@
+import os
 import httpx
 from typing import Dict, List, Any
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
@@ -8,23 +9,52 @@ logger = logging.getLogger(__name__)
 
 class DeepSeekClient:
     # DeepSeek API client for code generation
-    BASE_URL = "https://api.deepseek.com/v1"
-    
-    def __init__(self, api_key: str):
+    # Documented base URL as of 2026-09. "/v1" is still accepted as an
+    # OpenAI-SDK-compatibility alias but is no longer the documented form.
+    BASE_URL = "https://api.deepseek.com"
+
+    # Current model IDs (see api-docs.deepseek.com/quick_start/pricing):
+    #   deepseek-flash   -> DeepSeek-V4.1-Flash, 1M context, 384K max output
+    #   deepseek-v4-pro  -> DeepSeek-V4-Pro-0813 (routed to V4.1-Flash from 2026-09-14)
+    # The legacy names deepseek-chat / deepseek-reasoner were retired 2026-07-24.
+    DEFAULT_MODEL = "deepseek-flash"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str = None,
+        base_url: str = None,
+        thinking: bool = None,
+        reasoning_effort: str = None
+    ):
         self.api_key = api_key
         self.client = httpx.AsyncClient(
-            base_url=self.BASE_URL,
+            base_url=base_url or os.getenv("DEEPSEEK_BASE_URL", self.BASE_URL),
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json"
             },
-            timeout=httpx.Timeout(300.0, connect=30.0),  # 5 min total, 30s connect
+            # Thinking mode produces reasoning tokens before the answer, so
+            # responses take noticeably longer than non-thinking ones.
+            timeout=httpx.Timeout(600.0, connect=30.0),  # 10 min total, 30s connect
             limits=httpx.Limits(max_keepalive_connections=5, max_connections=10)
         )
-        # Use deepseek-chat for code generation (faster, more reliable)
-        # deepseek-reasoner is better for complex reasoning, but slower and can be overkill for code
-        self.model = "deepseek-chat"  # Changed from deepseek-reasoner for better code generation
-    
+        self.model = model or os.getenv("DEEPSEEK_MODEL", self.DEFAULT_MODEL)
+
+        # Thinking mode moved from a separate model name (the retired
+        # deepseek-reasoner) to a request parameter. On by default at high
+        # effort: this is a code-generation workload, where reasoning quality
+        # matters more than latency.
+        if thinking is None:
+            thinking = os.getenv("DEEPSEEK_THINKING", "true").lower() not in ("false", "0", "no")
+        self.thinking = thinking
+        self.reasoning_effort = reasoning_effort or os.getenv("DEEPSEEK_REASONING_EFFORT", "high")
+
+        logger.info(
+            f"DeepSeek client: model={self.model} thinking={self.thinking} "
+            f"reasoning_effort={self.reasoning_effort if self.thinking else 'n/a'}"
+        )
+
     @retry(
         stop=stop_after_attempt(3), 
         wait=wait_exponential(min=1, max=10),
@@ -33,11 +63,19 @@ class DeepSeekClient:
     async def generate(
         self,
         messages: List[Dict[str, str]],
-        max_tokens: int = 4096,
+        max_tokens: int = 8192,
         temperature: float = 0.3,  # Lower for code
+        thinking: bool = None,
         **kwargs
     ) -> Dict[str, Any]:
-        """Generate code with DeepSeek R1"""
+        """Generate a completion from the configured DeepSeek model.
+
+        Set thinking=False to override the client default for a single call
+        (useful for cheap, mechanical prompts where reasoning adds latency
+        without adding quality).
+        """
+        use_thinking = self.thinking if thinking is None else thinking
+
         payload = {
             "model": self.model,
             "messages": messages,
@@ -45,39 +83,53 @@ class DeepSeekClient:
             "temperature": temperature,
             **kwargs
         }
-        
+
+        if use_thinking:
+            payload["thinking"] = {"type": "enabled"}
+            payload["reasoning_effort"] = self.reasoning_effort
+
         try:
-            # Use longer timeout for large responses
-            response = await self.client.post(
-                "/chat/completions", 
-                json=payload,
-                timeout=httpx.Timeout(300.0, connect=30.0)  # 5 min total, 30s connect
-            )
+            # Inherit the client timeout (10 min) — a per-request override here
+            # would silently cap thinking-mode responses at a shorter limit.
+            response = await self.client.post("/chat/completions", json=payload)
             response.raise_for_status()
             data = response.json()
             choice = data["choices"][0]
             
-            # Handle both reasoner and chat models
+            # With thinking enabled the chain of thought arrives in
+            # reasoning_content and the actual answer in content. Never
+            # substitute one for the other: reasoning is prose about the code,
+            # not the code, and passing it downstream would be written to disk
+            # and served as a game.
             message_content = choice["message"].get("content", "")
             reasoning_content = choice["message"].get("reasoning_content", "")
-            
-            # For reasoner model, prefer content over reasoning for code generation
-            # For chat model, content is the main output
-            if not message_content and reasoning_content:
-                # Fallback: use reasoning if content is empty (shouldn't happen with chat model)
-                message_content = reasoning_content
-                logger.warning("⚠️  Using reasoning content as main content (unusual)")
-            
+            finish_reason = choice.get("finish_reason")
+
             if not message_content:
+                if reasoning_content and finish_reason == "length":
+                    logger.error(
+                        "❌ Token budget exhausted during reasoning — no answer was produced. "
+                        f"Raise max_tokens (currently {max_tokens}) or lower reasoning_effort."
+                    )
+                    raise ValueError(
+                        "DeepSeek ran out of tokens while reasoning; no content returned"
+                    )
                 logger.error("❌ Empty response from DeepSeek API")
                 raise ValueError("Empty response from DeepSeek API")
-            
+
+            if finish_reason == "length":
+                logger.warning(
+                    f"⚠️  Response hit the {max_tokens}-token cap and is truncated — "
+                    "downstream code should treat this as a failed attempt."
+                )
+
             return {
                 "content": message_content,
                 "reasoning": reasoning_content,
                 "model": data["model"],
                 "tokens_used": data["usage"]["total_tokens"],
-                "finish_reason": choice["finish_reason"]
+                "finish_reason": finish_reason,
+                "truncated": finish_reason == "length"
             }
         except httpx.HTTPStatusError as e:
             # Better error handling for 400 errors
@@ -132,9 +184,11 @@ class DeepSeekClient:
     async def health_check(self) -> bool:
         """Check API health"""
         try:
+            # No thinking: a liveness probe should be fast and cheap.
             await self.generate(
                 messages=[{"role": "user", "content": "print('test')"}],
-                max_tokens=10
+                max_tokens=10,
+                thinking=False
             )
             return True
         except:

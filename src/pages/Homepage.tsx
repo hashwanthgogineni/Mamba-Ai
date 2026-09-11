@@ -23,7 +23,7 @@ const Homepage: React.FC = () => {
           <span className="text-green-500 font-light">natural language</span>
         </h1>
         <p className="mt-6 max-w-2xl mx-auto text-white font-light">
-          Gamora transforms your ideas into game code instantly. No complex
+          Mamba transforms your ideas into game code instantly. No complex
           engines, no steep learning curves—just describe what you want to build.
         </p>
         <div className="flex justify-center gap-4 mt-8">
@@ -67,7 +67,7 @@ const Homepage: React.FC = () => {
               Instant code generation
             </h3>
             <p className="text-white text-sm font-light">
-              Describe your game mechanics and watch as Gamora generates clean,
+              Describe your game mechanics and watch as Mamba generates clean,
               production-ready code in real time.
             </p>
           </div>
@@ -88,7 +88,7 @@ const Homepage: React.FC = () => {
               Multiple game types
             </h3>
             <p className="text-white text-sm font-light">
-              From platformers to puzzles, RPGs to racing games—Gamora
+              From platformers to puzzles, RPGs to racing games—Mamba
               understands and builds any genre you imagine.
             </p>
           </div>
@@ -148,11 +148,11 @@ const Homepage: React.FC = () => {
               className="text-green-500 text-lg md:text-xl"
               style={{ fontFamily: "'Pixelify Sans', sans-serif" }}
             >
-              Gamora AI
+              Mamba
             </span>
           </div>
           <p className="text-gray-400 text-sm font-light">
-            © 2025 Gamora. All rights reserved.
+            © 2025 Mamba. All rights reserved.
           </p>
         </div>
       </footer>

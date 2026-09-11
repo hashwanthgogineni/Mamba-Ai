@@ -204,10 +204,10 @@ export default function GamoraClone() {
 const Sidebar = memo(({ showSignOut, setShowSignOut, onSignOut, dropdownRef, user }: SidebarProps) => (
   <aside className="w-64 bg-black border-r border-[#1a1a1a] flex flex-col h-screen overflow-hidden">
     <div className="flex-1 overflow-y-auto min-h-0">
-      {/* Gamora Logo - Centered */}
+      {/* Mamba Logo - Centered */}
       <div className="flex justify-center pt-6 pb-4">
         <span className="text-[#25D366] text-3xl font-logo font-light">
-          Gamora
+          Mamba
         </span>
       </div>
 
@@ -286,7 +286,7 @@ const ChatBox = memo(({ value, onChange, onSend }: ChatBoxProps) => (
     <div className="bg-[#0d0d0d] rounded-2xl p-4">
       <input
         type="text"
-        placeholder="Ask Gamora"
+        placeholder="Ask Mamba"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => e.key === "Enter" && onSend()}

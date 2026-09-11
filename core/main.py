@@ -65,26 +65,48 @@ async def lifespan(app: FastAPI):
     
     settings = Settings()
     
-    logger.info("📊 Connecting to Supabase...")
-    db_manager = DatabaseManager(settings.supabase_url, settings.supabase_key)
-    await db_manager.connect()
-    await db_manager.create_tables()
-    
-    logger.info("🔄 Initializing cache...")
-    cache_manager = CacheManager()
-    await cache_manager.connect()
-    
-    logger.info("💾 Connecting to Supabase Storage...")
-    storage_service = StorageService(
-        supabase_url=settings.supabase_url,
-        supabase_key=settings.supabase_key,
-        bucket=settings.storage_bucket
-    )
-    await storage_service.connect()
-    
-    logger.info("🔐 Setting up authentication...")
-    auth_manager = AuthManager(settings.supabase_url, settings.supabase_anon_key)
-    await auth_manager.initialize()
+    if settings.local_mode:
+        logger.info("🗃️  LOCAL MODE — no Supabase, no database, no auth")
+        from services.local_store import LocalDatabaseManager, LocalStorageService
+
+        db_manager = LocalDatabaseManager()
+        await db_manager.connect()
+        await db_manager.create_tables()
+
+        logger.info("🔄 Initializing cache...")
+        cache_manager = CacheManager()
+        await cache_manager.connect()
+
+        storage_service = LocalStorageService(
+            root_dir=settings.local_storage_dir,
+            public_base_url=settings.public_base_url
+        )
+        await storage_service.connect()
+
+        # Not initialised: with auth off nothing calls it, but the object must
+        # exist because routes read components['auth'] unconditionally.
+        auth_manager = AuthManager(settings.supabase_url or "http://localhost", settings.supabase_anon_key or "local")
+    else:
+        logger.info("📊 Connecting to Supabase...")
+        db_manager = DatabaseManager(settings.supabase_url, settings.supabase_key)
+        await db_manager.connect()
+        await db_manager.create_tables()
+
+        logger.info("🔄 Initializing cache...")
+        cache_manager = CacheManager()
+        await cache_manager.connect()
+
+        logger.info("💾 Connecting to Supabase Storage...")
+        storage_service = StorageService(
+            supabase_url=settings.supabase_url,
+            supabase_key=settings.supabase_key,
+            bucket=settings.storage_bucket
+        )
+        await storage_service.connect()
+
+        logger.info("🔐 Setting up authentication...")
+        auth_manager = AuthManager(settings.supabase_url, settings.supabase_anon_key)
+        await auth_manager.initialize()
     
     logger.info("⏱️  Setting up rate limiter...")
     rate_limiter = RateLimiter(cache_manager)
@@ -100,6 +122,31 @@ async def lifespan(app: FastAPI):
     )
     await web_game_service.start()
     
+    godot_builder = None
+    if settings.game_engine.lower() == "godot":
+        logger.info("🎮 Initializing Godot builder...")
+        from services.godot_builder import GodotBuilder
+        from models.deepseek_client import DeepSeekClient
+
+        godot_builder = GodotBuilder(
+            DeepSeekClient(
+                settings.deepseek_api_key,
+                model=settings.deepseek_model,
+                base_url=settings.deepseek_base_url,
+                thinking=settings.deepseek_thinking,
+                reasoning_effort=settings.deepseek_reasoning_effort,
+            ),
+            godot_path=settings.godot_path,
+            projects_dir=settings.godot_projects_dir,
+            max_repair_rounds=settings.godot_repair_rounds,
+        )
+        if not await godot_builder.is_available():
+            logger.error(
+                f"❌ Godot not usable at '{settings.godot_path}'. "
+                "Set GODOT_PATH in core/.env, or GAME_ENGINE=html5 to fall back."
+            )
+            godot_builder = None
+
     logger.info("🤖 Initializing AI Orchestrator...")
     orchestrator = MasterOrchestrator(
         deepseek_api_key=settings.deepseek_api_key,
@@ -107,7 +154,13 @@ async def lifespan(app: FastAPI):
         storage_service=storage_service,
         ws_manager=ws_manager,
         web_game_service=web_game_service,
-        enable_ai_assets=settings.enable_ai_assets if hasattr(settings, 'enable_ai_assets') else True
+        enable_ai_assets=settings.enable_ai_assets if hasattr(settings, 'enable_ai_assets') else True,
+        deepseek_model=settings.deepseek_model,
+        deepseek_base_url=settings.deepseek_base_url,
+        deepseek_thinking=settings.deepseek_thinking,
+        deepseek_reasoning_effort=settings.deepseek_reasoning_effort,
+        game_engine=settings.game_engine if godot_builder else "html5",
+        godot_builder=godot_builder
     )
     await orchestrator.initialize()
     
@@ -135,6 +188,26 @@ async def lifespan(app: FastAPI):
     components['orchestrator'] = orchestrator
     components['cleanup'] = cleanup_service
     
+    if settings.local_mode:
+        logger.warning("=" * 68)
+        logger.warning("🗃️  LOCAL MODE — Supabase and the database are bypassed")
+        logger.warning(f"    Games written to: {Path(settings.local_storage_dir).resolve()}")
+        logger.warning("    Project state is in memory and is lost on restart.")
+        logger.warning("    Set LOCAL_MODE=false in core/.env for the normal path.")
+        logger.warning("=" * 68)
+
+    if not settings.auth_enabled:
+        logger.warning("=" * 68)
+        logger.warning("⚠️  AUTH IS DISABLED (AUTH_ENABLED=false)")
+        logger.warning("    Every request runs as the local dev user.")
+        logger.warning("    Anyone who can reach this port can generate games")
+        logger.warning("    and read projects. Local development only.")
+        logger.warning("    Set AUTH_ENABLED=true in core/.env to re-enable.")
+        logger.warning("=" * 68)
+
+    engine = "Godot 4 (web export)" if godot_builder else "HTML5 Canvas"
+    logger.info(f"🎮 Game engine: {engine}")
+
     logger.info("✅ Gamora AI Backend started successfully!")
     logger.info(f"📍 Server running on {settings.host}:{settings.port}")
     logger.info(f"📚 API Docs: http://{settings.host}:{settings.port}/docs")
