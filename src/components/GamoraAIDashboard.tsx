@@ -149,15 +149,27 @@ export default function GamoraAIDashboard() {
       setCurrentStatus('Connecting...');
       completionMessageAddedRef.current = false; // Reset completion message flag
       
+      // React StrictMode runs this effect twice in dev. The socket is created
+      // asynchronously, so a naive cleanup runs before the promise resolves and
+      // leaves a second live socket behind — which then delivers every message
+      // twice. `cancelled` closes whichever socket arrives after teardown.
+      let cancelled = false;
+
       apiClient.createWebSocketConnection(projectId, handleWebSocketUpdate).then((ws) => {
+        if (cancelled) {
+          ws.close();
+          return;
+        }
         wsRef.current = ws;
       }).catch((error) => {
+        if (cancelled) return;
         console.error('Failed to connect WebSocket:', error);
-        addBotMessage('❌ Failed to connect to real-time updates');
+        addBotMessage('Failed to connect to real-time updates');
         setIsLoading(false);
       });
 
       return () => {
+        cancelled = true;
         if (wsRef.current) {
           wsRef.current.close();
           wsRef.current = null;
@@ -209,6 +221,8 @@ export default function GamoraAIDashboard() {
       apiClient.createWebSocketConnection(response.project_id, (update: ProgressUpdate) => {
         handleWebSocketUpdate(update);
       }).then((ws) => {
+        // Another send may have replaced this socket while we were connecting.
+        if (wsRef.current && wsRef.current !== ws) wsRef.current.close();
         wsRef.current = ws;
         setCurrentStatus('Starting generation...');
       }).catch((error) => {

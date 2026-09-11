@@ -189,7 +189,8 @@ class GodotBuilder:
                     else f"Fixing issues (round {round_no})..."
                 )
                 result = await self.validator.validate_all(
-                    project, plan.scripts, plan.scenes, list(plan.autoloads.keys())
+                    project, plan.scripts, self._asserted_nodes(plan),
+                    list(plan.autoloads.keys())
                 )
                 if result.ok:
                     break
@@ -344,12 +345,13 @@ class GodotBuilder:
 
             await say("Checking your changes in Godot...")
             result = await self.validator.validate_all(
-                project, plan.scripts, plan.scenes, list(plan.autoloads.keys())
+                project, plan.scripts, self._asserted_nodes(plan), list(plan.autoloads.keys())
             )
             if not result.ok:
                 await self._repair_round(project, plan_data, specs, result)
                 result = await self.validator.validate_all(
-                    project, plan.scripts, plan.scenes, list(plan.autoloads.keys())
+                    project, plan.scripts, self._asserted_nodes(plan),
+                    list(plan.autoloads.keys())
                 )
 
             await self.validator.import_project(project)
@@ -423,6 +425,25 @@ class GodotBuilder:
         return check
 
     # ---------- helpers ----------
+
+    def _asserted_nodes(self, plan) -> Dict[str, List[str]]:
+        """
+        Which declared node paths are worth asserting.
+
+        Only the MAIN scene's, because the level script looks those containers
+        up by name — getting them wrong genuinely breaks the game.
+
+        Entity scenes (Coin, Enemy, Player) are excluded on purpose: the planner
+        invents names before the file is written and the file-writer reasonably
+        picks different ones. Asserting a name one call guessed for another to
+        implement fails perfectly good scenes. What actually matters about an
+        entity scene — that it draws something and has a script — is covered by
+        the NO_VISUAL and NO_SCRIPT gates instead.
+        """
+        return {
+            scene: (nodes if scene == plan.main_scene else [])
+            for scene, nodes in plan.scenes.items()
+        }
 
     def _spec_index(self, plan_data: Dict) -> Dict[str, Dict]:
         specs: Dict[str, Dict] = {}
