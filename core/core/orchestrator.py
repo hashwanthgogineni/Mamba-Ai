@@ -7,7 +7,6 @@ import json
 import re
 
 from models.deepseek_client import DeepSeekClient
-from agents.asset_manager import AssetManagerAgent
 
 logger = logging.getLogger(__name__)
 
@@ -234,9 +233,13 @@ class MasterOrchestrator:
         deepseek_thinking: bool = None,
         deepseek_reasoning_effort: str = None,
         game_engine: str = "html5",
-        godot_builder=None
+        godot_builder=None,
+        deepseek_client=None
     ):
-        self.deepseek = DeepSeekClient(
+        # Accept a ready-made client so the whole app shares one connection
+        # pool and one configuration. Two clients meant a config change had to
+        # land in two places to take effect.
+        self.deepseek = deepseek_client or DeepSeekClient(
             deepseek_api_key,
             model=deepseek_model,
             base_url=deepseek_base_url,
@@ -249,11 +252,10 @@ class MasterOrchestrator:
         self.ws_manager = ws_manager
         self.enable_ai_assets = enable_ai_assets
         
-        self.asset_manager = AssetManagerAgent(
-            self.deepseek, 
-            storage_service, 
-            enable_ai_assets=enable_ai_assets
-        )
+        # AssetManagerAgent is unreachable: generate_assets() is never called and
+        # real sprites now come from services/asset_library.py. Constructing it
+        # only pulled in Pillow and printed a misleading startup line.
+        self.asset_manager = None
         
         self.use_template_system = False
         self.game_engine = (game_engine or "html5").lower()

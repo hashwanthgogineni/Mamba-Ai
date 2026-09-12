@@ -441,6 +441,40 @@ export default function GamoraAIDashboard() {
     chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  // Backstop: the WebSocket is the primary channel, but if it drops mid-build
+  // the terminal message is lost and the UI would sit on "Building..." forever.
+  // Poll the project while a build is in flight so we always learn the outcome.
+  useEffect(() => {
+    if (!isLoading || !currentProjectId) return;
+
+    const id = window.setInterval(async () => {
+      try {
+        const project = await apiClient.getProject(currentProjectId);
+        if (project.status === 'completed') {
+          setIsLoading(false);
+          setCurrentStatus('Completed');
+          if (project.web_preview_url) {
+            setPreviewUrl(
+              `${project.web_preview_url}${project.web_preview_url.includes('?') ? '&' : '?'}v=${Date.now()}`
+            );
+          }
+          if (!completionMessageAddedRef.current) {
+            resolveThinking('Your game is ready — it is running on the right.');
+            completionMessageAddedRef.current = true;
+          }
+        } else if (project.status === 'failed') {
+          setIsLoading(false);
+          setCurrentStatus('Failed');
+          resolveThinking('**Generation failed.** Check the server log for details.');
+        }
+      } catch {
+        // Project not readable yet; keep waiting.
+      }
+    }, 15000);
+
+    return () => window.clearInterval(id);
+  }, [isLoading, currentProjectId, resolveThinking]);
+
   return (
     <div className="flex flex-col h-screen bg-black text-white font-sans">
       {/* Header */}

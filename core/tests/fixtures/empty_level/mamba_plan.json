@@ -1,0 +1,7 @@
+{
+  "title": "Empty Level",
+  "genre": "shooter",
+  "main_scene": "scenes/Main.tscn",
+  "autoloads": {},
+  "level": {"waves": [{"count": 8, "rows": 2}]}
+}

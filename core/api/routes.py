@@ -431,7 +431,7 @@ async def websocket_endpoint(
     
     ws_manager = components['ws_manager']
     await ws_manager.connect(websocket, project_id)
-    
+
     try:
         await websocket.send_json({
             "type": "connected",
@@ -440,6 +440,42 @@ async def websocket_endpoint(
                 "message": "Connected to generation progress stream"
             }
         })
+
+        # Replay the last known state immediately.
+        #
+        # send_message() drops anything published while nobody is connected, so
+        # a client that attaches late — a refresh, a reconnect, StrictMode
+        # remounting the effect — used to miss the terminal message and hang on
+        # a stale "Building..." forever. The status is already cached; send it.
+        try:
+            cache = components.get('cache')
+            status = await cache.get_generation_status(project_id) if cache else None
+            if status:
+                state = status.get("status")
+                if state == "completed":
+                    db = components.get('db')
+                    project = await db.get_project(project_id) if db else None
+                    preview = (project or {}).get("web_preview_url")
+                    await websocket.send_json({
+                        "type": "complete",
+                        "data": {"project_id": project_id,
+                                 "preview_url": preview,
+                                 "web_preview_url": preview,
+                                 "replayed": True},
+                    })
+                elif state == "failed":
+                    await websocket.send_json({
+                        "type": "error",
+                        "data": {"error": status.get("message", "Generation failed"),
+                                 "replayed": True},
+                    })
+                else:
+                    await websocket.send_json({
+                        "type": "progress",
+                        "data": {"status": state, "message": status.get("message", "")},
+                    })
+        except Exception as e:
+            logger.debug(f"Could not replay status for {project_id}: {e}")
         
         while True:
             try:

@@ -74,3 +74,11 @@ core/asset_cache/
 godot_projects/
 local_storage/
 asset_cache/
+
+# Harnesses the gates write into a project at run time
+validate.gd
+validate.gd.uid
+runtime_check.gd
+runtime_check.gd.uid
+*.gd.uid
+.godot/

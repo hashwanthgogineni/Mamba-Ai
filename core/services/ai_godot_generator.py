@@ -536,10 +536,13 @@ Output ONLY the corrected file contents."""
             logger.info(f"   🔧 repairing {path} ({len(issues)} issue(s))")
             # A repair prompt carries the whole failing file plus the error
             # list, so it needs more headroom than a first draft.
+            # A repair is mechanical — the exact error and the exact file are
+            # both supplied. Reasoning costs tokens here without buying accuracy.
             response = await self.ai.generate(
                 [{"role": "user", "content": prompt}],
                 temperature=0.05,
                 max_tokens=64000,
+                thinking=False,
             )
         fixed = _strip_fences(response.get("content", ""))
         return fixed or None

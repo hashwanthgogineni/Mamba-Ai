@@ -1,0 +1,9 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="RectangleShape2D" id="Shape_e"]
+size = Vector2(32, 32)
+
+[node name="Enemy" type="CharacterBody2D"]
+
+[node name="Shape" type="CollisionShape2D" parent="."]
+shape = SubResource("Shape_e")

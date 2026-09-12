@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3]
+
+[sub_resource type="RectangleShape2D" id="Shape_1"]
+size = Vector2(32, 48)
+
+[node name="Main" type="Node2D"]
+
+[node name="Player" type="CharacterBody2D" parent="."]
+
+[node name="Shape" type="CollisionShape2D" parent="Player"]
+shape = SubResource("Shape_1")
+
+[node name="Visual" type="Polygon2D" parent="Player"]
+polygon = PackedVector2Array(-16, -24, 16, -24, 16, 24, -16, 24)

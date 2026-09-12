@@ -1,0 +1,13 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/player.gd" id="1_p"]
+
+[node name="Main" type="Node2D"]
+
+[node name="Enemies" type="Node2D" parent="."]
+
+[node name="Player" type="CharacterBody2D" parent="."]
+script = ExtResource("1_p")
+
+[node name="Visual" type="Polygon2D" parent="Player"]
+polygon = PackedVector2Array(-16, -24, 16, -24, 16, 24, -16, 24)

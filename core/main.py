@@ -114,28 +114,32 @@ async def lifespan(app: FastAPI):
     logger.info("🔌 Setting up WebSocket manager...")
     ws_manager = WebSocketManager()
     
-    logger.info("🌐 Initializing Web Game Service...")
-    from services.web_game_service import WebGameService
-    web_game_service = WebGameService(
-        projects_dir=settings.projects_dir.replace("projects", "web_projects"),
-        templates_dir="./web_templates"
-    )
-    await web_game_service.start()
+    web_game_service = None
+    if settings.game_engine.lower() != "godot":
+        logger.info("🌐 Initializing Web Game Service (HTML5 path)...")
+        from services.web_game_service import WebGameService
+        web_game_service = WebGameService(
+            projects_dir=settings.projects_dir.replace("projects", "web_projects"),
+            templates_dir="./web_templates"
+        )
+        await web_game_service.start()
     
+    from models.deepseek_client import DeepSeekClient
+    deepseek_client = DeepSeekClient(
+        settings.deepseek_api_key,
+        model=settings.deepseek_model,
+        base_url=settings.deepseek_base_url,
+        thinking=settings.deepseek_thinking,
+        reasoning_effort=settings.deepseek_reasoning_effort,
+    )
+
     godot_builder = None
     if settings.game_engine.lower() == "godot":
         logger.info("🎮 Initializing Godot builder...")
         from services.godot_builder import GodotBuilder
-        from models.deepseek_client import DeepSeekClient
 
         godot_builder = GodotBuilder(
-            DeepSeekClient(
-                settings.deepseek_api_key,
-                model=settings.deepseek_model,
-                base_url=settings.deepseek_base_url,
-                thinking=settings.deepseek_thinking,
-                reasoning_effort=settings.deepseek_reasoning_effort,
-            ),
+            deepseek_client,
             godot_path=settings.godot_path,
             projects_dir=settings.godot_projects_dir,
             max_repair_rounds=settings.godot_repair_rounds,
@@ -160,7 +164,8 @@ async def lifespan(app: FastAPI):
         deepseek_thinking=settings.deepseek_thinking,
         deepseek_reasoning_effort=settings.deepseek_reasoning_effort,
         game_engine=settings.game_engine if godot_builder else "html5",
-        godot_builder=godot_builder
+        godot_builder=godot_builder,
+        deepseek_client=deepseek_client
     )
     await orchestrator.initialize()
     

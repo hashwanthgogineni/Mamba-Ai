@@ -29,15 +29,20 @@ from services.godot_validator import GodotValidator, is_blocking  # noqa: E402
 
 GODOT = os.getenv("GODOT_PATH", "/opt/homebrew/bin/godot")
 PROJECTS = ROOT / "core" / "godot_projects"
+FIXTURES = ROOT / "core" / "tests" / "fixtures"
 
 GREEN, RED, YELLOW, DIM, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[2m", "\033[0m"
 
 # project id prefix -> the marker its known bug must still produce.
 # These are real failures that shipped to a user before the gate existed.
+# Hand-built minimal projects, committed to the repo, each reproducing one
+# real bug that once reached a user. They live here rather than pointing at
+# generated output because generated projects get pruned — and a suite whose
+# fixtures have vanished will happily report success having tested nothing.
 EXPECTED = {
-    "a883ff2a": "NO_SCRIPT",        # Player node with no player.gd at all
-    "3bf741a1": "TOO_FEW_ENEMY",    # waves declared, nothing ever spawned
-    "f071a1ab": "NO_VISUAL",        # Ghost.tscn had collision but drew nothing
+    "no_script":   "NO_SCRIPT",      # CharacterBody2D with no script: inert, silent
+    "no_visual":   "NO_VISUAL",      # entity scene with collision but nothing drawn
+    "empty_level": "TOO_FEW_ENEMY",  # plan declares enemies, level contains none
 }
 
 
@@ -89,11 +94,10 @@ async def main() -> int:
                         help="fail unless every known bug is still detected")
     args = parser.parse_args()
 
-    if not PROJECTS.exists():
-        print(f"{RED}No projects at {PROJECTS}{RESET}")
-        return 2
 
-    projects = sorted(p for p in PROJECTS.iterdir() if p.is_dir())
+    fixtures = sorted(p for p in FIXTURES.iterdir() if p.is_dir()) if FIXTURES.exists() else []
+    generated = sorted(p for p in PROJECTS.iterdir() if p.is_dir()) if PROJECTS.exists() else []
+    projects = fixtures + generated
     print(f"{DIM}{len(projects)} project(s) · godot={GODOT} · no AI calls{RESET}\n")
 
     caught: dict = {}
@@ -105,7 +109,7 @@ async def main() -> int:
 
         issues = await run_gates(project)
         blocking = [i for i in issues if is_blocking(i)]
-        caught[project.name[:8]] = " ".join(i.message for i in issues)
+        caught[project.name] = " ".join(i.message for i in issues)
 
         status = f"{GREEN}clean{RESET}" if not blocking else f"{RED}{len(blocking)} blocking{RESET}"
         print(f"  {project.name[:12]}  sprites={info['sprites']:<2} "
@@ -121,7 +125,8 @@ async def main() -> int:
     for prefix, marker in EXPECTED.items():
         messages = next((v for k, v in caught.items() if k.startswith(prefix)), None)
         if messages is None:
-            print(f"  {DIM}{prefix}: fixture missing, skipped{RESET}")
+            print(f"  {RED}FAIL{RESET}  {prefix}: FIXTURE MISSING — this gate was not tested at all")
+            failures += 1
             continue
         if marker in messages:
             print(f"  {GREEN}PASS{RESET}  {prefix} still detected as {marker}")
