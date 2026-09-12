@@ -7,6 +7,15 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+class DeepSeekFatalError(Exception):
+    """
+    A failure no amount of retrying will fix: no balance, bad key, unknown
+    model. Raised outside the retry predicate so it surfaces immediately with
+    a readable message instead of three wasted attempts and a RetryError that
+    hides the cause.
+    """
+
+
 class DeepSeekClient:
     # DeepSeek API client for code generation
     # Documented base URL as of 2026-09. "/v1" is still accepted as an
@@ -152,13 +161,25 @@ class DeepSeekClient:
                 logger.warning(f"⚠️  Large payload size: {payload_size} bytes - may cause 400 errors")
             
             # Check for common issues
+            if status_code == 402 or "insufficient balance" in error_detail.lower():
+                logger.error("❌ DeepSeek balance exhausted. Top up at https://platform.deepseek.com")
+                raise DeepSeekFatalError(
+                    "DeepSeek account has no credit left. Top up at "
+                    "https://platform.deepseek.com and try again."
+                ) from e
             if status_code == 401:
-                logger.error("❌ DeepSeek API key is invalid or missing. Check DEEPSEEK_API_KEY environment variable.")
-            elif status_code == 429:
-                logger.error("❌ DeepSeek API rate limit exceeded. Please wait before retrying.")
-            elif status_code == 400:
-                logger.error("❌ DeepSeek API bad request. Check model name and payload format.")
-            
+                logger.error("❌ DeepSeek API key is invalid or missing.")
+                raise DeepSeekFatalError(
+                    "DeepSeek API key is invalid or missing. Check DEEPSEEK_API_KEY in core/.env."
+                ) from e
+            if status_code == 400:
+                logger.error("❌ DeepSeek bad request. Check model name and payload format.")
+                raise DeepSeekFatalError(
+                    f"DeepSeek rejected the request ({error_detail.strip() or 'bad request'})."
+                ) from e
+            if status_code == 429:
+                logger.error("❌ DeepSeek rate limit exceeded; will retry.")
+
             raise
         except httpx.HTTPError as e:
             error_msg = str(e)

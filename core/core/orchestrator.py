@@ -292,9 +292,8 @@ class MasterOrchestrator:
             
             # Generate complete game directly from user prompt
             # AI will decide: mechanics, levels, style, everything
-            if not self.web_game:
-                raise ValueError("Web game service is required")
-            
+            # Route to Godot BEFORE touching the HTML5 service: that service is
+            # not constructed at all when the Godot engine is selected.
             if self.game_engine == "godot":
                 if not self.godot:
                     raise ValueError(
@@ -305,6 +304,9 @@ class MasterOrchestrator:
                     project_id, user_prompt, db_manager, start_time,
                     genre_id=genre_id, answers=answers
                 )
+
+            if not self.web_game:
+                raise ValueError("Web game service is required")
 
             # Detect dimension from user prompt
             from utils.dimension_detector import DimensionDetector

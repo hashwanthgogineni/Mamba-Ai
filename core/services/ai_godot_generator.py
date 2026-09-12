@@ -182,6 +182,8 @@ class AIGodotGenerator:
         self.ai = deepseek_client
         # role -> 'assets/x.png', set once the sprites are on disk
         self.sprites: Dict[str, str] = {}
+        # description of the emitted scenes the scripts run against
+        self.scene_contract: str = ""
         self._sem = asyncio.Semaphore(max_parallel)
 
     # ---------- stage 1 ----------
@@ -314,7 +316,9 @@ Return ONLY the JSON object."""
 
 {game_genres.rules_block(genre)}
 
-{manifest_block(self.sprites)}
+{self.scene_contract}
+
+{manifest_block(self.sprites) if not self.scene_contract else ""}
 
 GAME CONTEXT:
 {json.dumps(context, indent=2)}
@@ -465,7 +469,7 @@ Return JSON only:
 
 {game_genres.rules_block(genre)}
 
-{manifest_block(self.sprites)}
+{self.scene_contract}
 
 GAME CONTEXT:
 {json.dumps({k: plan.get(k) for k in ("title", "genre", "palette", "mechanics", "level")}, indent=2)[:4000]}

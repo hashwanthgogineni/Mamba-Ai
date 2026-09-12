@@ -203,3 +203,69 @@ def lint_tscn(source: str) -> List[LintIssue]:
         seen.add(f"{parent}/{name}" if parent != "." else name)
 
     return issues
+
+_BODY_TYPES = ("CharacterBody2D", "RigidBody2D", "StaticBody2D", "Area2D")
+_DRAWABLE_TYPES = (
+    "Polygon2D", "Sprite2D", "AnimatedSprite2D", "ColorRect", "TextureRect",
+    "Line2D", "Label", "MeshInstance2D", "TileMapLayer", "TileMap",
+)
+
+
+def check_scene_structure(source: str, scene_name: str = "") -> List[LintIssue]:
+    """
+    Structural checks read straight from the .tscn text.
+
+    These used to run inside Godot, which coupled them to compilation: a script
+    that fails to compile is not attached, so `get_script()` returned null and a
+    perfectly well-formed scene was reported as NO_SCRIPT. Reading the file says
+    what the scene actually declares, independent of whether its script happens
+    to compile in that context.
+    """
+    issues: List[LintIssue] = []
+    if not source.strip():
+        return issues
+
+    blocks = re.split(r"^\[node ", source, flags=re.M)[1:]
+    if not blocks:
+        return issues
+
+    root = blocks[0]
+    root_match = re.match(r'name="([^"]+)" type="([^"]+)"', root)
+    if not root_match:
+        return issues
+    root_name, root_type = root_match.groups()
+
+    # Any body that is meant to act must carry a script — not only the root.
+    # A scriptless CharacterBody2D placed directly in the world is an inert box
+    # that loads cleanly, throws nothing, and does nothing.
+    for block in blocks:
+        match = re.match(r'name="([^"]+)" type="([^"]+)"', block)
+        if not match:
+            continue
+        name, node_type = match.groups()
+        if node_type not in ("CharacterBody2D", "RigidBody2D"):
+            continue
+        # A node instanced from another scene inherits that scene's script.
+        if "instance=ExtResource" in block:
+            continue
+        if "script = ExtResource" not in block:
+            issues.append(LintIssue(
+                None,
+                f"NO_SCRIPT: node '{name}' ({node_type}) has no `script = ExtResource(...)`, "
+                f"so it cannot move or respond to input.",
+            ))
+
+    # …and must draw something, or it is invisible in game.
+    if root_type in _BODY_TYPES:
+        drawable = any(
+            any(f'type="{d}"' in block for d in _DRAWABLE_TYPES) for block in blocks
+        )
+        instanced = "instance=ExtResource" in source
+        if not drawable and not instanced:
+            issues.append(LintIssue(
+                None,
+                f"NO_VISUAL: root '{root_name}' ({root_type}) draws nothing — add a "
+                f"Sprite2D or Polygon2D child or it is invisible in game.",
+            ))
+
+    return issues

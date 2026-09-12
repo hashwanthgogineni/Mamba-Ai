@@ -226,6 +226,19 @@ class GodotValidator:
         # it there rather than to an unrepairable "project" bucket.
         fallback = next(iter(expected), "project") if len(expected) == 1 else "project"
         issues = self._scan_stderr(out, default_file=fallback)
+
+        # Structure is read from the file, not from the instantiated node: a
+        # script that fails to compile in this context is simply not attached,
+        # which used to look identical to a scene that never declared one.
+        from services.gdscript_lint import check_scene_structure
+        for scene_path in expected.keys():
+            scene_file = project / scene_path
+            if not scene_file.exists():
+                continue
+            for problem in check_scene_structure(
+                scene_file.read_text(encoding="utf-8"), scene_path
+            ):
+                issues.append(Issue(file=scene_path, message=problem.message, kind="structure"))
         for line in out.splitlines():
             line = line.strip()
             if not line.startswith("GATE_FAIL"):
@@ -314,8 +327,6 @@ func _init() -> void:
 \t\t\tfailures += 1
 \t\t\tcontinue
 \t\tfailures += _check_orphans(inst, res_path)
-\t\tfailures += _check_visible(inst, res_path)
-\t\tfailures += _check_scripted(inst, res_path)
 \t\tfor node_path in EXPECTED[scene_path]:
 \t\t\tif inst.get_node_or_null(NodePath(node_path)) == null:
 \t\t\t\tprint("GATE_FAIL MISSING_NODE ", res_path, " declared node '", node_path, "' is not in the built tree")

@@ -275,9 +275,9 @@ def plan_schema(genre: Genre) -> str:
 
 
 CODE_LEVEL_RULE = (
-    "- Declare the level data as constants in the level script and SPAWN it in "
-    "_ready(). Main.tscn holds only containers, the player and the HUD — never "
-    "one node per platform, enemy or collectible."
+    "- You do NOT write scene files. Every .tscn already exists, emitted from a "
+    "template. Declare the level data as constants in the level script and SPAWN "
+    "it in _ready() into the containers those scenes provide."
 )
 
 DENSITY_RULE = (
