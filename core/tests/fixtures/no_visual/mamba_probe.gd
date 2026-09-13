@@ -7,6 +7,8 @@ extends Node
 const FRAMES := 200
 const EXPECT := {}
 const ROLE_WORDS := {"enemy": ["enemy", "enemies", "ghost", "drone", "alien", "monster", "obstacle"], "collectible": ["coin", "collectible", "pellet", "orb", "gem", "star", "cell", "pickup"], "platform": ["platform", "ground", "floor", "wall", "tile", "brick"]}
+const EXPECT_PLAYER := true
+const EXPECT_MOTION := true
 
 var _frames := 0
 var _player: Node2D = null
@@ -47,8 +49,9 @@ func _finish() -> void:
 	_done = true
 	_check_content()
 	if _player == null:
-		print("RUNTIME_FAIL NO_PLAYER no node named like a player exists in the scene.")
-	elif not _moved:
+		if EXPECT_PLAYER:
+			print("RUNTIME_FAIL NO_PLAYER no node named like a player exists in the scene.")
+	elif not _moved and EXPECT_MOTION:
 		print("RUNTIME_FAIL PLAYER_INERT the player never moved in ", FRAMES,
 			" frames. It is not affected by gravity and does not respond to input, ",
 			"so the game has no working controls.")

@@ -23,7 +23,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "core"))
 
-from services import scene_templates as st  # noqa: E402
+from services import level_data, scene_templates as st  # noqa: E402
 from services.asset_library import AssetLibrary  # noqa: E402
 from services.godot_emitter import (  # noqa: E402
     GodotPlan, write_export_presets, write_icon, write_project_godot,
@@ -44,7 +44,13 @@ async def build_project(genre: str, into: Path) -> tuple[Path, dict]:
     (project / "assets").mkdir(parents=True)
 
     for script in (TEMPLATES / genre / "scripts").glob("*.gd"):
+        if script.name == "level_data.gd":
+            continue  # rendered below, exactly as the builder does it
         shutil.copy(script, project / "scripts" / script.name)
+
+    # Render level_data.gd from an empty plan, so this exercises the same code
+    # path a real build uses — and proves the per-genre defaults are playable.
+    level_data.write(project, {"title": f"{genre} template", "mechanics": {}, "level": {}}, genre)
 
     sprites = await AssetLibrary(cache_dir=str(ROOT / "core" / "asset_cache")).provision(
         genre, project
@@ -76,6 +82,7 @@ async def check(genre: str) -> bool:
         runtime = await GodotRuntime(GODOT).smoke_test(
             project, "scenes/Main.tscn", frames=300,
             autoloads={"GameManager": "res://scripts/game_manager.gd"},
+            genre=genre,
         )
 
         ok = static.ok and runtime.ok

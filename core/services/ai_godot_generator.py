@@ -226,9 +226,8 @@ Return JSON matching this shape exactly:
 {schema}
 
 REQUIREMENTS:
-- Every script in "scripts" must be referenced by a scene or be an autoload.
-- "nodes" lists the node paths that scene MUST contain, relative to its root.
-  These are verified after generation, so list only nodes you will create.
+- Do NOT include "scripts" or "scenes". Those are built from fixed templates;
+  anything you put there is discarded. Design the LEVEL.
 - Build a COMPLETE, DENSE level — a real game, not a demo. Fill the play area.
   A sparse level with three platforms is a failure, not a safe choice.
 - Use as many scripts and scenes as the game genuinely needs (typically 3-6
@@ -260,14 +259,19 @@ Return ONLY the JSON object."""
                     messages, temperature=0.3, max_tokens=64000, thinking=False
                 )
             plan = _parse_json(response.get("content", ""))
-            if plan and plan.get("scenes") and plan.get("scripts"):
+            # Scenes and scripts are emitted from templates, so the plan is not
+            # asked for them and must not be rejected for omitting them. What
+            # the plan must supply is the level: positions, counts and tuning.
+            if plan and plan.get("level"):
+                level = plan.get("level") or {}
                 logger.info(
                     f"📋 Plan: '{plan.get('title')}' "
-                    f"{len(plan.get('scenes', []))} scene(s), "
-                    f"{len(plan.get('scripts', []))} script(s)"
+                    f"{len(level.get('platforms') or level.get('grid') or [])} platform(s), "
+                    f"{len(level.get('enemies') or [])} enemy/enemies, "
+                    f"{len(level.get('collectibles') or [])} collectible(s)"
                 )
                 return plan
-            last_error = "missing scenes/scripts" if plan else "unparseable JSON"
+            last_error = "no level data" if plan else "unparseable JSON"
             logger.warning(f"Plan attempt {attempt + 1} failed: {last_error}")
             messages.append({"role": "user", "content":
                              f"That failed: {last_error}. Return ONLY valid JSON matching the schema."})

@@ -31,6 +31,19 @@ _RUNTIME_ERROR = re.compile(
 _AT_LOCATION = re.compile(r"at:\s*.*?\((?P<file>res://[^\s:)]+):(?P<line>\d+)\)")
 _RES_PATH = re.compile(r"res://(?P<file>[A-Za-z0-9_\-/.]+\.gd)")
 
+# Genres where a player node must exist. A puzzle board has none by design.
+_HAS_PLAYER = {"platformer", "maze", "shooter", "runner", "topdown"}
+
+# Genres where the player must visibly move with no input at all. Only the
+# platformer qualifies: it spawns above ground and gravity pulls it down, so a
+# motionless player there means physics or the script is not wired up.
+#
+# A runner's player stands on the ground and only jumps — the WORLD scrolls, not
+# the player. A shooter or top-down player moves on input alone. Asserting
+# motion in those is a false failure, and false failures make the repair loop
+# rewrite working code.
+_HAS_GRAVITY = {"platformer"}
+
 _NOISE = (
     "were leaked", "still in use", "RID allocation",
     "RIDs of type", "ObjectDB instances", "--- Debugging process stopped",
@@ -109,6 +122,7 @@ class GodotRuntime:
         frames: int = 300,
         autoloads: Optional[Dict[str, str]] = None,
         expect: Optional[Dict[str, int]] = None,
+        genre: str = "platformer",
     ) -> ValidationResult:
         """
         Run the main scene for `frames` physics steps and collect failures.
@@ -128,9 +142,14 @@ class GodotRuntime:
         # entirely by the harness. `--quit-after` boots the project properly,
         # autoloads and all, and the probe rides along as an extra autoload so
         # its assertions run inside the real game.
-        probe = _PROBE_GD.replace("__FRAMES__", str(frames)) \
-                         .replace("__EXPECT__", json.dumps(expect or {})) \
-                         .replace("__ROLE_WORDS__", json.dumps(_ROLE_WORDS))
+        probe = (
+            _PROBE_GD
+            .replace("__FRAMES__", str(frames))
+            .replace("__EXPECT__", json.dumps(expect or {}))
+            .replace("__ROLE_WORDS__", json.dumps(_ROLE_WORDS))
+            .replace("__EXPECT_PLAYER__", "true" if genre in _HAS_PLAYER else "false")
+            .replace("__EXPECT_MOTION__", "true" if genre in _HAS_GRAVITY else "false")
+        )
         (project / "mamba_probe.gd").write_text(probe, encoding="utf-8")
 
         project_file = project / "project.godot"
@@ -245,6 +264,8 @@ _PROBE_GD = '''extends Node
 const FRAMES := __FRAMES__
 const EXPECT := __EXPECT__
 const ROLE_WORDS := __ROLE_WORDS__
+const EXPECT_PLAYER := __EXPECT_PLAYER__
+const EXPECT_MOTION := __EXPECT_MOTION__
 
 var _frames := 0
 var _player: Node2D = null
@@ -285,8 +306,9 @@ func _finish() -> void:
 	_done = true
 	_check_content()
 	if _player == null:
-		print("RUNTIME_FAIL NO_PLAYER no node named like a player exists in the scene.")
-	elif not _moved:
+		if EXPECT_PLAYER:
+			print("RUNTIME_FAIL NO_PLAYER no node named like a player exists in the scene.")
+	elif not _moved and EXPECT_MOTION:
 		print("RUNTIME_FAIL PLAYER_INERT the player never moved in ", FRAMES,
 			" frames. It is not affected by gravity and does not respond to input, ",
 			"so the game has no working controls.")

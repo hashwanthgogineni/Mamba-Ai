@@ -259,18 +259,7 @@ def plan_schema(genre: Genre) -> str:
               "wall": "#3A3A45", "collectible": "#F2C94C"}},
   {genre.mechanics_schema},
   {genre.level_schema},
-  "autoloads": {{"GameManager": "scripts/game_manager.gd"}},
-  "scripts": [
-    {{"path": "scripts/game_manager.gd", "extends": "Node",
-     "purpose": "score, win/lose state, restart"}},
-    {{"path": "scripts/player.gd", "extends": "CharacterBody2D",
-     "purpose": "player control"}}
-  ],
-  "scenes": [
-    {{"path": "scenes/Main.tscn", "root_type": "Node2D",
-     "purpose": "the level",
-     "nodes": ["Player", "Platforms", "Enemies", "Collectibles", "HUD"]}}
-  ]
+  "autoloads": {{"GameManager": "scripts/game_manager.gd"}}
 }}'''
 
 

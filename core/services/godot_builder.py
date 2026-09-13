@@ -20,7 +20,7 @@ from services.asset_library import AssetLibrary
 from services.godot_emitter import (
     GodotPlan, scaffold, write_ai_files, write_project_godot
 )
-from services import scene_templates
+from services import level_data, scene_templates
 from services.godot_runtime import GodotRuntime, expected_content
 from services.godot_validator import GodotValidator
 
@@ -54,6 +54,7 @@ class GodotBuilder:
     ):
         self.generator = AIGodotGenerator(deepseek_client)
         self.assets = AssetLibrary()
+        self.templates_dir = Path(__file__).resolve().parent.parent / "templates"
         self.validator = GodotValidator(godot_path)
         self.runtime = GodotRuntime(godot_path)
         self.godot = godot_path
@@ -146,6 +147,40 @@ class GodotBuilder:
                 plan_data.get("genre") or "platformer", self.generator.sprites
             )
 
+            # ---- 2d. hand-written template, if this genre has one ----
+            # Game logic is not generated. The scripts are fixed templates that
+            # already build, compile and run; only level_data.gd differs between
+            # two games. That removes every AI call that used to write code, and
+            # with it every class of broken generated code.
+            genre_id = plan_data.get("genre") or "platformer"
+            template_dir = self.templates_dir / genre_id / "scripts"
+
+            if template_dir.is_dir():
+                await say("Assembling your game...")
+                (project / "scripts").mkdir(parents=True, exist_ok=True)
+                copied: List[str] = []
+                for script in sorted(template_dir.glob("*.gd")):
+                    if script.name == "level_data.gd":
+                        continue  # generated below, never copied
+                    (project / "scripts" / script.name).write_text(
+                        script.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
+                    copied.append(f"scripts/{script.name}")
+
+                copied.append(level_data.write(project, plan_data, genre_id))
+
+                files = {rel: (project / rel).read_text(encoding="utf-8") for rel in copied}
+                for scene_path in emitted["scenes"]:
+                    files[scene_path] = (project / scene_path).read_text(encoding="utf-8")
+
+                plan.scripts = sorted(copied)
+                logger.info(
+                    f"🧩 Used the '{genre_id}' template: {len(copied)} script(s), 0 AI calls for code"
+                )
+                return await self._finish(
+                    project, project_id, plan, plan_data, specs, files, say
+                )
+
             # ---- 3. scripts, each checked as it lands ----
             # Scripts are independent, so they stay concurrent while each one
             # loops on its own lint + compile check until green.
@@ -210,88 +245,9 @@ class GodotBuilder:
                         f"rather than shipping something broken."
                     )
 
-            # ---- 5. whole-project gates ----
-            result = None
-            for round_no in range(self.max_repair_rounds + 1):
-                await say(
-                    "Checking your game in Godot..." if round_no == 0
-                    else f"Fixing issues (round {round_no})..."
-                )
-                result = await self.validator.validate_all(
-                    project, plan.scripts, self._asserted_nodes(plan),
-                    list(plan.autoloads.keys())
-                )
-                if result.ok:
-                    break
-                if round_no == self.max_repair_rounds:
-                    logger.error(
-                        f"Still {len(result.issues)} issue(s) after "
-                        f"{self.max_repair_rounds} repair round(s)"
-                    )
-                    break
-
-                repaired = await self._repair_round(project, plan_data, specs, result)
-                if not repaired:
-                    logger.warning("Nothing could be repaired; stopping early")
-                    break
-
-            validation_ok = bool(result and result.ok)
-
-            # ---- 6. import (assets must be imported or they miss the .pck) ----
-            await say("Importing game resources...")
-            await self.validator.import_project(project)
-
-            # ---- 7. runtime smoke test: does it actually RUN? ----
-            await say("Play-testing your game...")
-            runtime = await self.runtime.smoke_test(project, plan.main_scene, autoloads=plan.autoloads,
-                                                expect=expected_content(plan_data))
-            if not runtime.ok:
-                repaired = await self._repair_round(project, plan_data, specs, runtime)
-                if repaired:
-                    await say("Fixing what the play-test found...")
-                    runtime = await self.runtime.smoke_test(project, plan.main_scene, autoloads=plan.autoloads,
-                                                expect=expected_content(plan_data))
-            runtime_ok = runtime.ok
-
-            # ---- 8. refuse to ship something that is not a game ----
-            # The pipeline used to export unconditionally and report success
-            # based on whether files appeared on disk. Every gate result was
-            # computed, logged and then ignored — which is how an inert player
-            # and an empty level both reached a user.
-            blocking = (result.blocking() if result else []) + runtime.blocking()
-            if blocking:
-                reasons = [i.as_prompt_line() for i in blocking]
-                logger.error(f"❌ Refusing to ship: {len(blocking)} blocking issue(s)")
-                for line in reasons[:6]:
-                    logger.error(f"   {line}")
-                return {
-                    "success": False,
-                    "project_id": project_id,
-                    "project_path": str(project),
-                    "files": sorted(files.keys()),
-                    "plan": plan_data,
-                    "validation_passed": False,
-                    "runtime_passed": False,
-                    "issues": reasons,
-                    "error": "The generated game is not playable: " + reasons[0],
-                }
-
-            # ---- 9. export ----
-            await say("Building the playable version...")
-            export = await self._export_web(project)
-
-            return {
-                "success": export["success"],
-                "project_id": project_id,
-                "project_path": str(project),
-                "dist_path": export.get("dist"),
-                "files": sorted(files.keys()),
-                "plan": plan_data,
-                "validation_passed": validation_ok,
-                "runtime_passed": runtime_ok,
-                "issues": [i.as_prompt_line() for i in (result.issues if result else [])],
-                "error": export.get("error"),
-            }
+            return await self._finish(
+                project, project_id, plan, plan_data, specs, files, say
+            )
 
         except Exception as e:
             from models.deepseek_client import DeepSeekFatalError
@@ -398,12 +354,14 @@ class GodotBuilder:
             runtime = await self.runtime.smoke_test(
                 project, plan.main_scene, autoloads=plan.autoloads,
                 expect=expected_content(plan_data),
+                genre=plan_data.get('genre') or 'platformer',
             )
             if not runtime.ok:
                 if await self._repair_round(project, plan_data, specs, runtime):
                     runtime = await self.runtime.smoke_test(
                         project, plan.main_scene, autoloads=plan.autoloads,
                         expect=expected_content(plan_data),
+                        genre=plan_data.get('genre') or 'platformer',
                     )
 
             await say("Rebuilding the playable version...")
@@ -425,6 +383,98 @@ class GodotBuilder:
         except Exception as e:
             logger.error(f"Iteration failed for {project_id}: {e}", exc_info=True)
             return {"success": False, "project_id": project_id, "error": str(e)}
+
+
+    async def _finish(self, project, project_id, plan, plan_data, specs, files, say):
+        """
+        Everything after the files exist: gates, runtime, fail-closed, export.
+
+        Shared by both paths so a templated game is held to exactly the same
+        standard as a generated one — the templates get no free pass.
+        """
+            # ---- 5. whole-project gates ----
+        result = None
+        for round_no in range(self.max_repair_rounds + 1):
+            await say(
+                "Checking your game in Godot..." if round_no == 0
+                else f"Fixing issues (round {round_no})..."
+            )
+            result = await self.validator.validate_all(
+                project, plan.scripts, self._asserted_nodes(plan),
+                list(plan.autoloads.keys())
+            )
+            if result.ok:
+                break
+            if round_no == self.max_repair_rounds:
+                logger.error(
+                    f"Still {len(result.issues)} issue(s) after "
+                    f"{self.max_repair_rounds} repair round(s)"
+                )
+                break
+
+            repaired = await self._repair_round(project, plan_data, specs, result)
+            if not repaired:
+                logger.warning("Nothing could be repaired; stopping early")
+                break
+
+        validation_ok = bool(result and result.ok)
+
+        # ---- 6. import (assets must be imported or they miss the .pck) ----
+        await say("Importing game resources...")
+        await self.validator.import_project(project)
+
+        # ---- 7. runtime smoke test: does it actually RUN? ----
+        await say("Play-testing your game...")
+        runtime = await self.runtime.smoke_test(project, plan.main_scene, autoloads=plan.autoloads,
+                                            expect=expected_content(plan_data), genre=plan_data.get('genre') or 'platformer')
+        if not runtime.ok:
+            repaired = await self._repair_round(project, plan_data, specs, runtime)
+            if repaired:
+                await say("Fixing what the play-test found...")
+                runtime = await self.runtime.smoke_test(project, plan.main_scene, autoloads=plan.autoloads,
+                                            expect=expected_content(plan_data), genre=plan_data.get('genre') or 'platformer')
+        runtime_ok = runtime.ok
+
+        # ---- 8. refuse to ship something that is not a game ----
+        # The pipeline used to export unconditionally and report success
+        # based on whether files appeared on disk. Every gate result was
+        # computed, logged and then ignored — which is how an inert player
+        # and an empty level both reached a user.
+        blocking = (result.blocking() if result else []) + runtime.blocking()
+        if blocking:
+            reasons = [i.as_prompt_line() for i in blocking]
+            logger.error(f"❌ Refusing to ship: {len(blocking)} blocking issue(s)")
+            for line in reasons[:6]:
+                logger.error(f"   {line}")
+            return {
+                "success": False,
+                "project_id": project_id,
+                "project_path": str(project),
+                "files": sorted(files.keys()),
+                "plan": plan_data,
+                "validation_passed": False,
+                "runtime_passed": False,
+                "issues": reasons,
+                "error": "The generated game is not playable: " + reasons[0],
+            }
+
+        # ---- 9. export ----
+        await say("Building the playable version...")
+        export = await self._export_web(project)
+
+        return {
+            "success": export["success"],
+            "project_id": project_id,
+            "project_path": str(project),
+            "dist_path": export.get("dist"),
+            "files": sorted(files.keys()),
+            "plan": plan_data,
+            "validation_passed": validation_ok,
+            "runtime_passed": runtime_ok,
+            "issues": [i.as_prompt_line() for i in (result.issues if result else [])],
+            "error": export.get("error"),
+        }
+
 
     # ---------- per-file checkers ----------
 
