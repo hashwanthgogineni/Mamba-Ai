@@ -28,14 +28,14 @@ const ChatMessage = ({ message, isUser, isThinking = false, id }: ChatMessagePro
         {isThinking ? (
           <div className="flex items-center gap-2.5">
             <Loader2 className="w-5 h-5 animate-spin text-[#25D366]" />
-            <span className="text-[15px] text-white font-semibold">{message}</span>
+            <span className="font-ai text-[15px] text-white">{message}</span>
           </div>
         ) : isUser ? (
           <p className="text-sm sm:text-base text-white font-medium whitespace-pre-wrap leading-relaxed break-words">
             {message}
           </p>
         ) : (
-          <div className="text-sm sm:text-base prose prose-invert prose-sm max-w-none leading-relaxed break-words">
+          <div className="font-ai text-[15px] sm:text-base prose prose-invert prose-sm max-w-none leading-relaxed break-words">
             <ReactMarkdown
               components={{
                 p: ({ children }) => (

@@ -44,38 +44,24 @@ export default function GenerationLoader({ status }: GenerationLoaderProps) {
       {/* ---------- Circular drawing animation ---------- */}
       <div className="relative flex items-center justify-center">
         <svg
-          width="320"
-          height="320"
+          width="240"
+          height="240"
           viewBox="0 0 220 220"
           className="gl-svg"
           role="img"
           aria-label={`Generating your game, ${formatClock(elapsed)} elapsed`}
         >
-          <defs>
-            <linearGradient id="glArc" x1="0" y1="0" x2="1" y2="1">
-              <stop offset="0%" stopColor="#25D366" />
-              <stop offset="100%" stopColor="#0E8C56" />
-            </linearGradient>
-          </defs>
+          {/* One quiet track. */}
+          <circle cx="110" cy="110" r="92" fill="none" stroke="#1A1A1A" strokeWidth="1" />
 
-          {/* Track for the progress ring */}
+          {/* Elapsed progress — a single thin arc, nothing else. */}
           <circle
             cx="110"
             cy="110"
-            r={R_PROGRESS}
+            r="92"
             fill="none"
-            stroke="#1C2620"
+            stroke="#25D366"
             strokeWidth="2"
-          />
-
-          {/* Elapsed-time progress ring */}
-          <circle
-            cx="110"
-            cy="110"
-            r={R_PROGRESS}
-            fill="none"
-            stroke="url(#glArc)"
-            strokeWidth="3"
             strokeLinecap="round"
             strokeDasharray={C_PROGRESS}
             strokeDashoffset={dashOffset}
@@ -83,82 +69,13 @@ export default function GenerationLoader({ status }: GenerationLoaderProps) {
             style={{ transition: "stroke-dashoffset 1s linear" }}
           />
 
-          {/* Outer sweep — long dashes, slow clockwise */}
-          <g className="gl-spin-cw-slow">
-            <circle
-              cx="110"
-              cy="110"
-              r="86"
-              fill="none"
-              stroke="#25D366"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeDasharray="60 400"
-              opacity="0.75"
-            />
-            <circle
-              cx="110"
-              cy="110"
-              r="86"
-              fill="none"
-              stroke="#25D366"
-              strokeWidth="1.5"
-              strokeLinecap="round"
-              strokeDasharray="18 122"
-              strokeDashoffset="140"
-              opacity="0.3"
-            />
-          </g>
-
-          {/* Mid ring — counter-clockwise, faster */}
-          <g className="gl-spin-ccw">
-            <circle
-              cx="110"
-              cy="110"
-              r="66"
-              fill="none"
-              stroke="#25D366"
-              strokeWidth="1"
-              strokeDasharray="4 14"
-              opacity="0.45"
-            />
-          </g>
-
-          {/* Inner ring — draws itself, erases, repeats */}
-          <circle
-            className="gl-draw"
-            cx="110"
-            cy="110"
-            r="46"
-            fill="none"
-            stroke="#25D366"
-            strokeWidth="2"
-            strokeLinecap="round"
-            transform="rotate(-90 110 110)"
-          />
-
-          {/* Orbiting node riding the progress arc */}
-          <g
-            style={{
-              transformBox: "view-box",
-              transformOrigin: "110px 110px",
-              transform: `rotate(${progress * 360 - 90}deg)`,
-              transition: "transform 1s linear",
-            }}
-          >
-            <circle cx={110 + R_PROGRESS} cy="110" r="4" fill="#25D366" />
-            <circle cx={110 + R_PROGRESS} cy="110" r="9" fill="#25D366" opacity="0.18" />
-          </g>
-
-          {/* Crosshair ticks — quiet structure, not decoration */}
-          <g stroke="#25D366" strokeWidth="1" opacity="0.35">
-            <line x1="110" y1="4" x2="110" y2="14" />
-            <line x1="110" y1="206" x2="110" y2="216" />
-            <line x1="4" y1="110" x2="14" y2="110" />
-            <line x1="206" y1="110" x2="216" y2="110" />
+          {/* The moving object: one dot orbiting continuously, with a short
+              comet tail so motion reads even when progress barely changes. */}
+          <g className="gl-orbit">
+            <circle cx="110" cy="18" r="14" fill="#25D366" opacity="0.10" />
+            <circle cx="110" cy="18" r="3.5" fill="#25D366" />
           </g>
         </svg>
-
         {/* Centre readout */}
         <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
           <span
@@ -186,29 +103,16 @@ export default function GenerationLoader({ status }: GenerationLoaderProps) {
       </div>
 
       <style>{`
-        @keyframes gl-spin-cw  { to { transform: rotate(360deg); } }
-        @keyframes gl-spin-ccw { to { transform: rotate(-360deg); } }
-        @keyframes gl-draw {
-          0%   { stroke-dasharray: 0 289;   stroke-dashoffset: 0; }
-          45%  { stroke-dasharray: 289 289; stroke-dashoffset: 0; }
-          55%  { stroke-dasharray: 289 289; stroke-dashoffset: 0; }
-          100% { stroke-dasharray: 289 289; stroke-dashoffset: -289; }
-        }
-        .gl-spin-cw-slow,
-        .gl-spin-ccw {
+        @keyframes gl-orbit { to { transform: rotate(360deg); } }
+        .gl-orbit {
           transform-box: view-box;
           transform-origin: 110px 110px;
+          animation: gl-orbit 3.2s linear infinite;
         }
-        .gl-spin-cw-slow { animation: gl-spin-cw 14s linear infinite; }
-        .gl-spin-ccw     { animation: gl-spin-ccw 8s linear infinite; }
-        .gl-draw         { animation: gl-draw 4s ease-in-out infinite; }
-        .gl-svg          { overflow: visible; }
+        .gl-svg { overflow: visible; }
 
         @media (prefers-reduced-motion: reduce) {
-          .gl-spin-cw-slow,
-          .gl-spin-ccw,
-          .gl-draw { animation: none; }
-          .gl-draw { stroke-dasharray: 289 289; stroke-dashoffset: 72; }
+          .gl-orbit { animation: none; }
         }
       `}</style>
     </div>

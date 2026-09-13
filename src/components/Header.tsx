@@ -1,6 +1,6 @@
 // src/components/Header.tsx
 import { Button } from "@/components/ui/button";
-import { LogOut } from "lucide-react";
+import { ArrowLeft, LogOut } from "lucide-react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/hooks/useAuth";
 import { supabase } from "@/lib/supabase";
@@ -14,6 +14,8 @@ const Header = () => {
   const location = useLocation();
   const { user, loading } = useAuth();
   const inApp = APP_ROUTES.includes(location.pathname);
+  // Only the dashboard has somewhere to go back TO.
+  const canGoBack = location.pathname === "/chat-dashboard";
 
   const handleGetStarted = () => {
     if (location.pathname === "/") {
@@ -34,7 +36,6 @@ const Header = () => {
     <>
       <header className="sticky top-0 z-50 w-full bg-black border-b border-border/50">
         <div className="container flex h-16 items-center justify-between px-6">
-          {/* Logo */}
           <div className="flex items-center space-x-3">
             <h1
               onClick={() => navigate("/")}
@@ -50,7 +51,22 @@ const Header = () => {
           </div>
 
           {/* Right-side controls */}
-          <div className="flex items-center space-x-3">
+          <div className="flex items-center space-x-2">
+            {canGoBack && (
+              <div
+                onClick={() => navigate("/")}
+                title="Back to prompt"
+                aria-label="Back to prompt"
+                className="
+                  flex items-center justify-center
+                  h-10 w-10 rounded-full cursor-pointer p-2
+                  transition-colors
+                  hover:border hover:border-white/70
+                "
+              >
+                <ArrowLeft className="h-5 w-5 text-green-500" />
+              </div>
+            )}
             {!loading && user ? (
               <div className="flex items-center space-x-4">
                 {/* Logout icon */}

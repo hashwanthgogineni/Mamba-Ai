@@ -119,8 +119,12 @@ class GodotBuilder:
             # The AI can only reference art that is already on disk, so this
             # must happen before the scenes are generated.
             await say("Fetching game art...")
+            # The project id seeds the variant choice, so two identical
+            # prompts still produce different characters, enemies and
+            # pickups instead of the same art every time.
             self.generator.sprites = await self.assets.provision(
-                plan_data.get("genre") or "platformer", project
+                plan_data.get("genre") or "platformer", project,
+                prompt=user_prompt, seed=abs(hash(project_id)) % 997,
             )
 
             # ---- 2c. scenes, emitted from templates. No AI. ----
@@ -305,7 +309,8 @@ class GodotBuilder:
                     current[rel] = f.read_text(encoding="utf-8")
 
             self.generator.sprites = await self.assets.provision(
-                plan_data.get("genre") or "platformer", project
+                plan_data.get("genre") or "platformer", project,
+                prompt=change_request, seed=abs(hash(project_id)) % 997,
             )
 
             await say("Working out what to change...")

@@ -146,7 +146,6 @@ class GodotRuntime:
             _PROBE_GD
             .replace("__FRAMES__", str(frames))
             .replace("__EXPECT__", json.dumps(expect or {}))
-            .replace("__ROLE_WORDS__", json.dumps(_ROLE_WORDS))
             .replace("__EXPECT_PLAYER__", "true" if genre in _HAS_PLAYER else "false")
             .replace("__EXPECT_MOTION__", "true" if genre in _HAS_GRAVITY else "false")
         )
@@ -263,7 +262,11 @@ _PROBE_GD = '''extends Node
 
 const FRAMES := __FRAMES__
 const EXPECT := __EXPECT__
-const ROLE_WORDS := __ROLE_WORDS__
+const GROUPS := {
+	"enemy": ["enemies"],
+	"collectible": ["collectibles", "tiles"],
+	"platform": ["platforms"],
+}
 const EXPECT_PLAYER := __EXPECT_PLAYER__
 const EXPECT_MOTION := __EXPECT_MOTION__
 
@@ -320,7 +323,7 @@ func _check_content() -> void:
 	# spawner passes every structural gate while being an empty game.
 	for role in EXPECT.keys():
 		var want: int = int(EXPECT[role])
-		var found := _count_role(get_tree().root, ROLE_WORDS[role])
+		var found := _count_role(String(role))
 		if found == 0:
 			print("RUNTIME_FAIL NO_", String(role).to_upper(),
 				" the level declares ", want, " ", role,
@@ -331,15 +334,15 @@ func _check_content() -> void:
 				" exist at runtime.")
 
 
-func _count_role(n: Node, words: Array) -> int:
+func _count_role(role: String) -> int:
+	# Count by GROUP, never by node name. Godot auto-names nodes added in code
+	# after their CLASS (@StaticBody2D@4, @CollisionShape2D@2), so matching names
+	# against words like "platform" finds nothing and reports an empty level for
+	# a game that is fully populated. Groups are an explicit contract the
+	# templates opt into with add_to_group().
 	var total := 0
-	var lower := String(n.name).to_lower()
-	for w in words:
-		if lower.contains(String(w)):
-			total += 1
-			break
-	for c in n.get_children():
-		total += _count_role(c, words)
+	for group in GROUPS.get(role, [role]):
+		total += get_tree().get_nodes_in_group(String(group)).size()
 	return total
 
 

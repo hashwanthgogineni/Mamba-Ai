@@ -82,3 +82,8 @@ runtime_check.gd
 runtime_check.gd.uid
 *.gd.uid
 .godot/
+
+# Vendored CC0 sprite library (39MB, 4006 files). Fetched by
+# core/scripts/fetch_assets.py — not committed, but required to run.
+core/asset_library_raw/
+core/asset_index.json

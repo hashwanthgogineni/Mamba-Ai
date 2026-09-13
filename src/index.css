@@ -204,6 +204,13 @@ All colors MUST be HSL.
     font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
   }
   
+  /* Mamba's own voice in the chat. Share Tech Mono is already loaded for the
+     app, so this costs no extra request. */
+  .font-ai {
+    font-family: 'Share Tech Mono', ui-monospace, monospace;
+    letter-spacing: 0.015em;
+  }
+
   .font-logo {
     font-family: 'Pixelify Sans', cursive; /* only for Gamora logo */
   }

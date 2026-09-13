@@ -593,10 +593,10 @@ export default function GamoraAIDashboard() {
                   <button
                     onClick={handleDownloadGame}
                     className="
-                      bg-black text-green-500 border border-green-500 
-                      px-6 py-3 rounded-sm font-light
-                      transition-colors duration-300
-                      hover:bg-green-500 hover:text-black
+                      bg-[#25D366] text-black border-none
+                      px-6 py-3 rounded-sm font-medium
+                      transition-colors duration-200
+                      hover:bg-[#4ae389]
                       flex items-center gap-2
                     "
                   >
